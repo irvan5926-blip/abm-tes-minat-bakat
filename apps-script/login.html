@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Login - ABM Tes Minat & Bakat</title>
+<?!= include('styles'); ?>
+</head>
+<body>
+<div class="app-shell">
+  <div class="app-header">
+    <div>
+      <h1>ABM - Tes Minat & Bakat</h1>
+      <div class="sub">Asesmen Bakat &amp; Minat berbasis Google Apps Script</div>
+    </div>
+    <div class="right">
+      <a class="btn outline small" href="?page=panduan" target="_blank" style="background:white;color:var(--c-text)">Buku Panduan</a>
+    </div>
+  </div>
+
+  <div id="alerts"></div>
+
+  <div class="row">
+    <div class="card col-2">
+      <h2>Siswa - Mulai Tes</h2>
+      <p class="muted">Masukkan token yang diberikan oleh admin / guru BK.
+      Token aktif hanya 5 menit setelah dibuat.</p>
+      <label for="tokenInput">Token Tes (8 karakter)</label>
+      <input class="input" id="tokenInput" placeholder="Misal: A7K3M9P2"
+             maxlength="8" style="text-transform:uppercase;letter-spacing:0.2rem;font-size:1.2rem;text-align:center"
+             autocomplete="off"/>
+      <div class="spacer"></div>
+      <button class="btn block" id="btnStart">Mulai Tes</button>
+    </div>
+
+    <div class="card col-2">
+      <h2>Admin - Login</h2>
+      <p class="muted">Khusus admin / guru BK untuk mengelola token dan
+      mengunduh laporan.</p>
+      <label for="adminEmail">Email</label>
+      <input class="input" id="adminEmail" type="email" autocomplete="username">
+      <div class="spacer"></div>
+      <label for="adminPass">Password</label>
+      <input class="input" id="adminPass" type="password" autocomplete="current-password">
+      <div class="spacer"></div>
+      <button class="btn block" id="btnLogin">Login Admin</button>
+    </div>
+  </div>
+
+  <footer class="app-footer">
+    Versi <span id="ver">-</span> &middot;
+    <a href="?page=panduan">Panduan Penggunaan</a>
+  </footer>
+</div>
+
+<script>
+function $(id){return document.getElementById(id);}
+function showAlert(type, msg){
+  $('alerts').innerHTML = '<div class="alert ' + type + '">' + msg + '</div>';
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+function clearAlerts(){ $('alerts').innerHTML = ''; }
+function toUpperOnInput(e){ e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g,''); }
+
+$('tokenInput').addEventListener('input', toUpperOnInput);
+$('tokenInput').addEventListener('keydown', function(e){
+  if(e.key === 'Enter') $('btnStart').click();
+});
+$('adminPass').addEventListener('keydown', function(e){
+  if(e.key === 'Enter') $('btnLogin').click();
+});
+
+$('btnStart').addEventListener('click', function(){
+  clearAlerts();
+  var tok = $('tokenInput').value.trim();
+  if(tok.length < 4){ showAlert('warn', 'Token minimal 4 karakter.'); return; }
+  $('btnStart').disabled = true; $('btnStart').innerHTML = '<span class="spinner"></span> Memvalidasi...';
+  google.script.run.withSuccessHandler(function(r){
+    $('btnStart').disabled = false; $('btnStart').textContent = 'Mulai Tes';
+    if(!r.ok){ showAlert('error', r.msg); return; }
+    sessionStorage.setItem('abm_token', tok);
+    sessionStorage.setItem('abm_token_exp', r.expires_at);
+    sessionStorage.setItem('abm_token_jenis', r.jenis_tes);
+    sessionStorage.setItem('abm_siswa', JSON.stringify({
+      nama: r.siswa_nama, nis: r.siswa_nis, kelas: r.siswa_kelas, sekolah: r.siswa_sekolah
+    }));
+    location.href = '?page=menu';
+  }).withFailureHandler(function(e){
+    $('btnStart').disabled = false; $('btnStart').textContent = 'Mulai Tes';
+    showAlert('error', 'Server error: ' + e.message);
+  }).validateToken(tok);
+});
+
+$('btnLogin').addEventListener('click', function(){
+  clearAlerts();
+  var email = $('adminEmail').value.trim();
+  var pass = $('adminPass').value;
+  if(!email || !pass){ showAlert('warn', 'Email & password wajib diisi.'); return; }
+  $('btnLogin').disabled = true; $('btnLogin').innerHTML = '<span class="spinner"></span> Login...';
+  google.script.run.withSuccessHandler(function(r){
+    $('btnLogin').disabled = false; $('btnLogin').textContent = 'Login Admin';
+    if(!r.ok){ showAlert('error', r.msg); return; }
+    sessionStorage.setItem('abm_admin_session', r.session);
+    sessionStorage.setItem('abm_admin_nama', r.nama);
+    sessionStorage.setItem('abm_admin_email', r.email);
+    location.href = '?page=admin';
+  }).withFailureHandler(function(e){
+    $('btnLogin').disabled = false; $('btnLogin').textContent = 'Login Admin';
+    showAlert('error', 'Server error: ' + e.message);
+  }).adminLogin(email, pass);
+});
+
+google.script.run.withSuccessHandler(function(r){
+  $('ver').textContent = r.version;
+}).ping();
+</script>
+</body>
+</html>

@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Buku Panduan - ABM Tes Minat & Bakat</title>
+<?!= include('styles'); ?>
+<style>
+.toc { background: var(--c-primary-3); padding: 1rem 1.5rem; border-radius: 8px; margin-bottom: 1.5rem; }
+.toc ol { margin: 0.5rem 0 0 1.2rem; }
+.toc a { color: var(--c-accent); text-decoration: none; }
+.toc a:hover { text-decoration: underline; }
+.note-box { background: var(--c-bg); border-left: 4px solid var(--c-primary); padding: 0.75rem 1rem; margin: 1rem 0; border-radius: 4px; }
+.warn-box { background: #FFF3E0; border-left: 4px solid #FB8C00; padding: 0.75rem 1rem; margin: 1rem 0; border-radius: 4px; }
+section { padding: 1rem 0; border-bottom: 1px solid var(--c-primary-3); }
+section:last-child { border-bottom: none; }
+code { background: var(--c-primary-3); padding: 0.1rem 0.4rem; border-radius: 4px; font-size: 0.9em; }
+ul, ol { line-height: 1.7; }
+</style>
+</head>
+<body>
+<div class="app-shell">
+  <div class="app-header">
+    <div>
+      <h1>Buku Panduan Penggunaan</h1>
+      <div class="sub">Aplikasi ABM - Tes Minat & Bakat</div>
+    </div>
+    <div class="right">
+      <a class="btn outline small" href="?page=login" style="background:white;color:var(--c-text)">← Kembali ke Login</a>
+    </div>
+  </div>
+
+  <div class="card toc">
+    <h2>Daftar Isi</h2>
+    <ol>
+      <li><a href="#tentang">Tentang Aplikasi</a></li>
+      <li><a href="#peran">Peran Pengguna (Admin & Siswa)</a></li>
+      <li><a href="#admin">Panduan untuk Admin / Guru BK</a></li>
+      <li><a href="#siswa">Panduan untuk Siswa</a></li>
+      <li><a href="#bakat">Tentang Tes Bakat (9 Subtes, 7 Dimensi)</a></li>
+      <li><a href="#minat">Tentang Tes Minat (8 Bidang, 18 Area ABM)</a></li>
+      <li><a href="#iq">Cara Membaca Prediksi IQ</a></li>
+      <li><a href="#acak">Pengacakan Soal & Audit Trail</a></li>
+      <li><a href="#pdf">Laporan PDF Profesional</a></li>
+      <li><a href="#troubleshoot">Pemecahan Masalah</a></li>
+    </ol>
+  </div>
+
+  <div class="card">
+
+    <section id="tentang">
+      <h2>1. Tentang Aplikasi</h2>
+      <p>Aplikasi ini adalah sistem asesmen <b>Bakat &amp; Minat</b> berbasis
+      Google Apps Script (GAS) yang dirancang untuk lembaga pendidikan
+      (SMP/SMA/SMK) di Indonesia. Materi mengacu pada:</p>
+      <ul>
+        <li><b>Panduan Pemaknaan ABM</b> (Pusmendik, 2024) - 7 dimensi bakat
+        &amp; 18 area minat.</li>
+        <li><b>Buku Panduan Bakat &amp; Minat</b> (Direktorat Pembinaan SMK,
+        2016) - 9 subtes bakat &amp; struktur 8 bidang minat.</li>
+      </ul>
+      <p>Database 100% berbasis <b>Google Spreadsheet</b> sehingga tidak
+      perlu DB eksternal. Aplikasi mendukung deployment via <code>Deploy as
+      Web App</code> dari editor Apps Script.</p>
+    </section>
+
+    <section id="peran">
+      <h2>2. Peran Pengguna</h2>
+      <table class="table">
+        <thead><tr><th>Peran</th><th>Hak</th></tr></thead>
+        <tbody>
+          <tr><td><b>Admin / Guru BK</b></td>
+            <td>Login dengan email + password. Bisa: membuat token tes,
+            melihat daftar token, melihat semua hasil tes, mengunduh PDF
+            laporan, ubah password, tambah admin.</td></tr>
+          <tr><td><b>Siswa</b></td>
+            <td>Login hanya dengan token (tanpa akun). Hanya bisa
+            mengerjakan satu jenis tes sesuai token, dan melihat ringkasan
+            hasil sendiri (tanpa unduh PDF).</td></tr>
+        </tbody>
+      </table>
+      <div class="note-box"><b>Default admin awal:</b> dibuat otomatis
+      dengan email pemilik script + password <code>admin123</code>. Wajib
+      diubah pada login pertama.</div>
+    </section>
+
+    <section id="admin">
+      <h2>3. Panduan untuk Admin / Guru BK</h2>
+
+      <h3>3.1 Login</h3>
+      <ol>
+        <li>Buka URL aplikasi (mis. <code>...exec?page=login</code>).</li>
+        <li>Pada panel <b>Admin - Login</b>, isi email &amp; password.</li>
+        <li>Klik <b>Login Admin</b>.</li>
+      </ol>
+
+      <h3>3.2 Membuat Token Tes</h3>
+      <ol>
+        <li>Pada tab <b>Buat Token</b>, pilih jenis tes (Minat / Bakat).</li>
+        <li>Isi minimal <b>Nama Siswa</b> (kolom lain opsional tapi sangat
+            disarankan untuk identifikasi laporan).</li>
+        <li>Klik <b>Buat Token</b>. Token 8 karakter (huruf besar + angka)
+            akan muncul. Klik <b>Copy Token</b> untuk menyalin.</li>
+        <li>Bagikan token ke siswa. Token aktif <b>5 menit</b> sejak
+            dibuat. Setelah lewat 5 menit, status otomatis menjadi
+            <code>EXPIRED</code> dan tidak bisa dipakai.</li>
+      </ol>
+      <div class="warn-box"><b>Penting:</b> Satu token hanya bisa dipakai
+      sekali. Setelah siswa memulai tes, status menjadi <code>TERPAKAI</code>.
+      Token tidak bisa dipakai ulang oleh siswa lain.</div>
+
+      <h3>3.3 Memantau Hasil &amp; Unduh PDF</h3>
+      <ol>
+        <li>Buka tab <b>Hasil &amp; Laporan</b>.</li>
+        <li>Filter berdasarkan jenis tes bila perlu.</li>
+        <li>Klik <b>Detail</b> untuk melihat ringkasan, atau <b>⬇ PDF</b>
+            untuk mengunduh laporan profesional.</li>
+      </ol>
+
+      <h3>3.4 Membatalkan Token / Ubah Password</h3>
+      <ul>
+        <li>Tab <b>Daftar Token</b> &rarr; klik <b>Batalkan</b> pada token
+        AKTIF untuk menonaktifkan.</li>
+        <li>Tombol <b>Ubah Password</b> di header untuk mengganti password.</li>
+      </ul>
+    </section>
+
+    <section id="siswa">
+      <h2>4. Panduan untuk Siswa</h2>
+      <ol>
+        <li>Buka URL aplikasi yang diberikan oleh guru BK.</li>
+        <li>Masukkan token 8 karakter pada panel <b>Siswa - Mulai Tes</b>.</li>
+        <li>Klik <b>Mulai Tes</b>. Anda akan diarahkan ke halaman menu.</li>
+        <li>Pilih jenis tes yang sesuai dengan token Anda.</li>
+        <li>Kerjakan soal dengan tenang. <b>Jawaban tersimpan otomatis</b>
+            setiap kali Anda memilih.</li>
+        <li>Setelah semua selesai, klik <b>Selesai &amp; Submit</b>.</li>
+        <li>Lihat ringkasan hasil. Laporan lengkap (PDF) akan diberikan
+            oleh guru BK Anda.</li>
+      </ol>
+      <div class="warn-box">Jangan menutup browser di tengah tes - meskipun
+      sesi tersimpan, akan lebih aman menyelesaikan dalam satu sesi.
+      Pastikan koneksi internet stabil.</div>
+    </section>
+
+    <section id="bakat">
+      <h2>5. Tes Bakat - 9 Subtes &amp; 7 Dimensi ABM</h2>
+      <p>Tes bakat terdiri dari 9 subtes (rata-rata 6-10 menit per subtes),
+      lalu hasilnya dipetakan ke 7 dimensi bakat ABM:</p>
+      <table class="table">
+        <thead><tr><th>Subtes</th><th>Mengukur</th><th>Dimensi ABM</th></tr></thead>
+        <tbody>
+          <tr><td>Penalaran Visual</td><td>Identifikasi pola gambar</td><td>Spasial</td></tr>
+          <tr><td>Penalaran Numerik</td><td>Pola &amp; relasi angka</td><td>Kuantitatif</td></tr>
+          <tr><td>Analisa Verbal</td><td>Logika &amp; deduksi teks</td><td>Verbal</td></tr>
+          <tr><td>Penalaran Urutan</td><td>Pola urutan abstrak</td><td>Penalaran</td></tr>
+          <tr><td>Pengenalan Spasial</td><td>Hubungan ruang 2D</td><td>Spasial</td></tr>
+          <tr><td>Tiga Dimensi</td><td>Visualisasi 3D</td><td>Spasial</td></tr>
+          <tr><td>Sistematisasi</td><td>Mengurutkan &amp; mengkategori</td><td>Klerikal</td></tr>
+          <tr><td>Kosa Kata</td><td>Sinonim, antonim, kosakata</td><td>Bahasa</td></tr>
+          <tr><td>Figural Angka</td><td>Aritmetika praktis</td><td>Kuantitatif</td></tr>
+        </tbody>
+      </table>
+      <p>Catatan: dimensi <b>Mekanika</b> dihitung sebagai proksi dari
+      rata-rata Spasial &amp; Kuantitatif (karena tidak ada subtes mekanik
+      langsung pada bank soal).</p>
+      <p>Klasifikasi skor (skala 0-100):</p>
+      <ul>
+        <li><span class="badge tinggi">Tinggi</span> - skor &gt; 70</li>
+        <li><span class="badge sedang">Sedang</span> - 40 &le; skor &le; 70</li>
+        <li><span class="badge rendah">Rendah</span> - skor &lt; 40</li>
+      </ul>
+    </section>
+
+    <section id="minat">
+      <h2>6. Tes Minat - 8 Bidang &amp; 18 Area ABM</h2>
+      <p>Tes minat terdiri dari 2 tahap:</p>
+      <ol>
+        <li><b>Bidang Soal 1</b> (28 pasangan kata) - menentukan 3 dari 8
+        bidang minat dominan: Komunikasi, Seni, Kesehatan, Pariwisata,
+        Administrasi, Teknologi, Agrobisnis, Teknik.</li>
+        <li><b>Program Detail</b> - untuk masing-masing dari 3 bidang
+        teratas, siswa mengerjakan 28 pasangan pekerjaan untuk menemukan
+        program keahlian SMK paling cocok.</li>
+      </ol>
+      <p>Skor 8 bidang juga dipetakan ke 18 area minat ABM (Tracey, 2002):</p>
+      <ul>
+        <li><b>8 Minat Dasar:</b> Social Facilitating, Managing, Business
+        Detail, Data Processing, Mechanical, Nature/Outdoors, Artistic,
+        Helping.</li>
+        <li><b>5 Minat Metodis:</b> Social Sciences, Influence, Business
+        Systems, Financial Analysis, Science.</li>
+        <li><b>5 Minat Praktis:</b> Quality Control, Manual Work, Personal
+        Service, Construction/Repair, Basic Services.</li>
+      </ul>
+      <p>Hasil akhir menampilkan 3 area dasar, 1 area metodis, dan 1 area
+      praktis dengan skor tertinggi.</p>
+    </section>
+
+    <section id="iq">
+      <h2>7. Cara Membaca Prediksi IQ</h2>
+      <p>Prediksi IQ <i>hanya muncul pada Tes Bakat</i>. Dihitung dengan formula:</p>
+      <p><code>IQ ≈ 70 + 0.6 × rata_skor_7_dimensi</code> (dibatasi 50-150).</p>
+      <p>Kategori:</p>
+      <table class="table">
+        <thead><tr><th>Skor IQ</th><th>Kategori</th></tr></thead>
+        <tbody>
+          <tr><td>≥ 130</td><td>Sangat Superior</td></tr>
+          <tr><td>120-129</td><td>Superior</td></tr>
+          <tr><td>110-119</td><td>Di atas Rata-rata</td></tr>
+          <tr><td>90-109</td><td>Rata-rata</td></tr>
+          <tr><td>80-89</td><td>Di bawah Rata-rata</td></tr>
+          <tr><td>70-79</td><td>Borderline</td></tr>
+          <tr><td>&lt; 70</td><td>Rendah</td></tr>
+        </tbody>
+      </table>
+      <div class="warn-box"><b>Penting:</b> Prediksi IQ ini bersifat
+      <i>indikatif</i> dan <b>BUKAN</b> pengganti tes IQ klinis (WAIS, WISC,
+      atau CFIT). Gunakan sebagai gambaran awal untuk konseling, bukan
+      sebagai diagnosis resmi.</div>
+    </section>
+
+    <section id="acak">
+      <h2>8. Pengacakan Soal &amp; Audit Trail</h2>
+      <p>Setiap siswa mendapat <b>urutan soal yang berbeda</b>. Pengacakan
+      menggunakan PRNG deterministik (Mulberry32) berdasarkan
+      <code>sesi_id + token</code> sehingga:</p>
+      <ul>
+        <li>Hasil pengacakan reproducible (jika perlu reaudit).</li>
+        <li>Mapping <b>nomor asli &rarr; nomor tampil</b> disimpan
+            sepenuhnya pada sheet <code>Sesi</code> kolom
+            <code>mapping_json</code>.</li>
+        <li>Pada laporan PDF, ada bagian <b>Audit Pengacakan Soal</b> yang
+            menampilkan tabel pemetaan misal: <i>Soal asli no 5 dipindah ke
+            no 18</i>.</li>
+      </ul>
+      <p>Untuk Tes Bakat, pengacakan dilakukan <b>per subtes terpisah</b>
+      sehingga subtes Penalaran Visual tetap muncul sebelum subtes
+      Numerik, tapi urutan internal dalam tiap subtes diacak.</p>
+    </section>
+
+    <section id="pdf">
+      <h2>9. Laporan PDF Profesional</h2>
+      <p>Laporan PDF berisi:</p>
+      <ul>
+        <li><b>Identitas siswa</b> (nama, NIS, kelas, sekolah).</li>
+        <li><b>Prediksi IQ</b> (untuk tes bakat) - kotak besar di atas.</li>
+        <li><b>Skor 7 dimensi bakat</b> dengan klasifikasi
+            (Tinggi/Sedang/Rendah).</li>
+        <li><b>Skor detail per subtes</b>.</li>
+        <li><b>3 bidang minat dominan</b> (untuk tes minat).</li>
+        <li><b>Rekomendasi program keahlian SMK</b>.</li>
+        <li><b>Pemetaan ke 18 area minat ABM</b>.</li>
+        <li><b>Audit pengacakan soal</b> - tabel mapping no asli &rarr;
+            no tampil.</li>
+      </ul>
+      <p>PDF disimpan di Google Drive admin pada folder
+      <code>ABM Reports</code>, dan juga distream langsung ke browser
+      dalam format base64 saat tombol unduh ditekan.</p>
+      <div class="warn-box">Hanya admin yang sedang login (sesi 4 jam)
+      yang dapat memanggil endpoint <code>downloadReport</code>. Siswa
+      tidak punya akses unduh.</div>
+    </section>
+
+    <section id="troubleshoot">
+      <h2>10. Pemecahan Masalah</h2>
+      <table class="table">
+        <thead><tr><th>Masalah</th><th>Solusi</th></tr></thead>
+        <tbody>
+          <tr><td>Token expired sebelum siswa login</td>
+              <td>Buat token baru. Token hanya berlaku 5 menit; bagikan
+              setelah siswa siap di depan layar.</td></tr>
+          <tr><td>Siswa salah klik jenis tes</td>
+              <td>Token mengikat ke jenis tes tertentu. Buat token baru
+              dengan jenis benar.</td></tr>
+          <tr><td>Sesi terputus di tengah tes</td>
+              <td>Selama token masih dalam masa 5 menit, siswa dapat
+              memasukkan token lagi dan sesi akan dilanjutkan dari soal
+              yang sudah dijawab.</td></tr>
+          <tr><td>PDF tidak terunduh</td>
+              <td>Pastikan browser tidak memblokir popup. Coba refresh
+              halaman, login ulang admin (sesi habis 4 jam).</td></tr>
+          <tr><td>Lupa password admin</td>
+              <td>Dari editor Apps Script, jalankan fungsi
+              <code>resetAdminPassword('email','passwordbaru')</code>.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+  </div>
+
+  <footer class="app-footer">
+    Versi <span id="ver">-</span> &middot;
+    <a href="?page=login">Kembali ke Login</a>
+  </footer>
+</div>
+<script>
+google.script.run.withSuccessHandler(function(r){
+  document.getElementById('ver').textContent = r.version;
+}).ping();
+</script>
+</body>
+</html>

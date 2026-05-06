@@ -1,0 +1,331 @@
+/**
+ * Bank soal Tes Bakat.
+ *
+ * Disusun mengikuti 9 subtes dari "Buku Panduan Bakat & Minat SMK"
+ * (Direktorat Pembinaan SMK, 2016) dan dipetakan ke 7 dimensi bakat
+ * pada "Panduan Pemaknaan ABM" (Pusmendik, 2024):
+ *
+ *   Subtes (Buku SMK)         -> Dimensi ABM
+ *   ------------------------------------------------
+ *   1. Penalaran Visual        -> Spasial
+ *   2. Penalaran Numerik       -> Kuantitatif
+ *   3. Analisa Verbal          -> Verbal
+ *   4. Penalaran Urutan        -> Penalaran
+ *   5. Pengenalan Spasial      -> Spasial
+ *   6. Tiga Dimensi            -> Spasial
+ *   7. Sistematisasi           -> Klerikal
+ *   8. Kosa Kata               -> Bahasa
+ *   9. Figural Angka           -> Kuantitatif
+ *
+ * Setiap soal punya `id` (no asli sesuai buku) dan `kunci` (a/b/c/d/e).
+ * Soal dengan id 1..N adalah soal "asli" buku, soal modifikasi bertanda
+ * `mod: true` (bila ada) dengan keterangan referensi soal asli.
+ *
+ * Setelah pengacakan, mapping no_asli -> no_tampil disimpan di sheet Sesi
+ * sehingga audit "soal nomor X dipindah ke nomor Y" dapat dilakukan.
+ */
+
+const BAKAT_SUBTES = [
+  { kode: 'PV',  nama: 'Penalaran Visual',   dimensi: 'Spasial',     durasi_menit: 8 },
+  { kode: 'PN',  nama: 'Penalaran Numerik',  dimensi: 'Kuantitatif', durasi_menit: 8 },
+  { kode: 'AV',  nama: 'Analisa Verbal',     dimensi: 'Verbal',      durasi_menit: 10 },
+  { kode: 'PU',  nama: 'Penalaran Urutan',   dimensi: 'Penalaran',   durasi_menit: 8 },
+  { kode: 'PS',  nama: 'Pengenalan Spasial', dimensi: 'Spasial',     durasi_menit: 6 },
+  { kode: 'TD',  nama: 'Tiga Dimensi',       dimensi: 'Spasial',     durasi_menit: 6 },
+  { kode: 'SI',  nama: 'Sistematisasi',      dimensi: 'Klerikal',    durasi_menit: 6 },
+  { kode: 'KK',  nama: 'Kosa Kata',          dimensi: 'Bahasa',      durasi_menit: 6 },
+  { kode: 'FA',  nama: 'Figural Angka',      dimensi: 'Kuantitatif', durasi_menit: 8 }
+];
+
+/**
+ * Bank soal. Tiap entry:
+ *   { id, subtes, pertanyaan, opsi: {a,b,c,d,e}, kunci, ket? }
+ *
+ * Ket pendek (ket) menjelaskan logika jawaban - hanya muncul di laporan PDF
+ * untuk admin, tidak ditampilkan ke siswa.
+ */
+function getBakatSoal_() {
+  return [
+    /* ========== 1. Penalaran Visual (PV) ==========
+       Pola: pilih gambar yang berbeda / lanjutan rangkaian.
+       Direpresentasikan dengan deskripsi tekstual + simbol unicode.
+    */
+    { id:'PV01', subtes:'PV',
+      pertanyaan:'Manakah pola yang BERBEDA dari empat pola lainnya?',
+      opsi:{ a:'■ ● ■ ●', b:'▲ ◆ ▲ ◆', c:'★ ☀ ★ ☀', d:'♣ ♠ ♣ ♥', e:'☂ ⚑ ☂ ⚑' },
+      kunci:'d', ket:'Hanya (d) yang tidak berpola berulang AB-AB.' },
+    { id:'PV02', subtes:'PV',
+      pertanyaan:'Lanjutan rangkaian: ◯ → ◐ → ● → ◑ → ?',
+      opsi:{ a:'◯', b:'◐', c:'●', d:'◑', e:'◓' },
+      kunci:'a', ket:'Siklus 4 fase bulan kembali ke awal.' },
+    { id:'PV03', subtes:'PV',
+      pertanyaan:'Gambar mana yang TIDAK termasuk kelompok yang sama?',
+      opsi:{ a:'segitiga sama sisi', b:'segitiga sama kaki',
+             c:'segitiga siku-siku', d:'persegi', e:'segitiga lancip' },
+      kunci:'d', ket:'Hanya (d) yang bukan segitiga.' },
+    { id:'PV04', subtes:'PV',
+      pertanyaan:'Jika ▲ berputar 90° searah jarum jam tiap langkah, posisi setelah 3 langkah dari ▲ (atas) adalah?',
+      opsi:{ a:'▶ (kanan)', b:'▼ (bawah)', c:'◀ (kiri)', d:'▲ (atas)', e:'◆ (rotasi 45°)' },
+      kunci:'c', ket:'90°×3 = 270° searah = sama dengan 90° berlawanan = kiri.' },
+    { id:'PV05', subtes:'PV',
+      pertanyaan:'Lanjutan: △ ▽ △ ▽ △ ?',
+      opsi:{ a:'△', b:'▽', c:'◇', d:'○', e:'□' }, kunci:'b' },
+    { id:'PV06', subtes:'PV',
+      pertanyaan:'Manakah yang BERBEDA: kucing - anjing - merpati - kuda - sapi?',
+      opsi:{ a:'kucing', b:'anjing', c:'merpati', d:'kuda', e:'sapi' },
+      kunci:'c', ket:'Hanya merpati yang bukan mamalia.' },
+    { id:'PV07', subtes:'PV',
+      pertanyaan:'Cermin: bayangan huruf "b" pada cermin vertikal adalah?',
+      opsi:{ a:'b', b:'d', c:'p', d:'q', e:'B' },
+      kunci:'b', ket:'b dicermin horizontal -> d.' },
+    { id:'PV08', subtes:'PV',
+      pertanyaan:'Lanjutan pola: 2 segitiga, 4 persegi, 6 segilima, 8 segienam, ? segitujuh?',
+      opsi:{ a:'7', b:'9', c:'10', d:'12', e:'14' },
+      kunci:'c', ket:'Bertambah 2 tiap langkah: 2,4,6,8,10.' },
+
+    /* ========== 2. Penalaran Numerik (PN) ========== */
+    { id:'PN01', subtes:'PN',
+      pertanyaan:'Lengkapi: 2, 4, 6, 8, ?',
+      opsi:{ a:'9', b:'10', c:'11', d:'12', e:'14' }, kunci:'b' },
+    { id:'PN02', subtes:'PN',
+      pertanyaan:'Lengkapi: 1, 3, 9, 27, ?',
+      opsi:{ a:'54', b:'63', c:'72', d:'81', e:'90' },
+      kunci:'d', ket:'Dikalikan 3.' },
+    { id:'PN03', subtes:'PN',
+      pertanyaan:'Lengkapi: 1, 1, 2, 3, 5, 8, ?',
+      opsi:{ a:'11', b:'12', c:'13', d:'14', e:'15' },
+      kunci:'c', ket:'Fibonacci.' },
+    { id:'PN04', subtes:'PN',
+      pertanyaan:'Lengkapi: 100, 50, 25, 12.5, ?',
+      opsi:{ a:'5', b:'6', c:'6.25', d:'7.25', e:'10' },
+      kunci:'c', ket:'Dibagi 2.' },
+    { id:'PN05', subtes:'PN',
+      pertanyaan:'Lengkapi: 2, 6, 12, 20, 30, ?',
+      opsi:{ a:'36', b:'40', c:'42', d:'48', e:'56' },
+      kunci:'c', ket:'Selisih 4,6,8,10,12.' },
+    { id:'PN06', subtes:'PN',
+      pertanyaan:'Berapakah hasil 7 × 8 − 12?',
+      opsi:{ a:'40', b:'42', c:'44', d:'46', e:'48' }, kunci:'c' },
+    { id:'PN07', subtes:'PN',
+      pertanyaan:'Lengkapi: 5, 10, 20, 40, ?',
+      opsi:{ a:'60', b:'70', c:'80', d:'100', e:'120' }, kunci:'c' },
+    { id:'PN08', subtes:'PN',
+      pertanyaan:'Lengkapi: 81, 64, 49, 36, ?',
+      opsi:{ a:'16', b:'20', c:'25', d:'27', e:'30' },
+      kunci:'c', ket:'Kuadrat 9,8,7,6,5.' },
+    { id:'PN09', subtes:'PN',
+      pertanyaan:'Lengkapi: 3, 7, 15, 31, ?',
+      opsi:{ a:'47', b:'55', c:'63', d:'71', e:'79' },
+      kunci:'c', ket:'×2+1.' },
+    { id:'PN10', subtes:'PN',
+      pertanyaan:'Berapakah ¼ dari 240?',
+      opsi:{ a:'40', b:'50', c:'60', d:'70', e:'80' }, kunci:'c' },
+
+    /* ========== 3. Analisa Verbal (AV) ==========
+       Soal logika & deduksi singkat (bahasa Indonesia).
+    */
+    { id:'AV01', subtes:'AV',
+      pertanyaan:'Anton, Budi, Johan masing-masing memiliki dua mobil. Hanya satu yang tidak punya Toyota. Budi satu-satunya pemilik Honda. Johan punya Toyota. Anton dan Budi punya Suzuki. Siapa pemilik mobil Mercy?',
+      opsi:{ a:'Anton', b:'Budi', c:'Johan', d:'Tidak ada', e:'Tidak dapat ditentukan' },
+      kunci:'c', ket:'Anton: Toyota+Suzuki. Budi: Honda+Suzuki. Johan: Toyota+Mercy.' },
+    { id:'AV02', subtes:'AV',
+      pertanyaan:'Semua dokter pintar. Sebagian orang pintar kaya. Kesimpulan paling tepat?',
+      opsi:{ a:'Semua dokter kaya',
+             b:'Tidak ada dokter yang kaya',
+             c:'Sebagian dokter mungkin kaya',
+             d:'Semua orang kaya adalah dokter',
+             e:'Tidak ada simpulan' },
+      kunci:'c' },
+    { id:'AV03', subtes:'AV',
+      pertanyaan:'Jika hari ini Selasa, dua hari setelah lusa adalah hari?',
+      opsi:{ a:'Kamis', b:'Jumat', c:'Sabtu', d:'Minggu', e:'Senin' },
+      kunci:'c', ket:'Lusa=Kamis, +2=Sabtu.' },
+    { id:'AV04', subtes:'AV',
+      pertanyaan:'Andi lebih tinggi dari Beni. Beni lebih tinggi dari Cahyo. Cahyo lebih tinggi dari Doni. Siapa paling pendek?',
+      opsi:{ a:'Andi', b:'Beni', c:'Cahyo', d:'Doni', e:'Tidak dapat ditentukan' }, kunci:'d' },
+    { id:'AV05', subtes:'AV',
+      pertanyaan:'5 anak duduk berderet: Ali di kiri Bagas, Cici di kanan Bagas, Dedi di kiri Ali, Eka di kanan Cici. Urutan dari kiri ke kanan?',
+      opsi:{ a:'Dedi-Ali-Bagas-Cici-Eka', b:'Ali-Dedi-Bagas-Cici-Eka',
+             c:'Dedi-Bagas-Ali-Cici-Eka', d:'Eka-Cici-Bagas-Ali-Dedi',
+             e:'Tidak dapat ditentukan' },
+      kunci:'a' },
+    { id:'AV06', subtes:'AV',
+      pertanyaan:'Setiap pelajar wajib disiplin. Sandi tidak disiplin. Maka:',
+      opsi:{ a:'Sandi pasti pelajar', b:'Sandi pasti bukan pelajar',
+             c:'Sandi mungkin pelajar', d:'Sandi pasti malas',
+             e:'Tidak dapat disimpulkan' },
+      kunci:'b', ket:'Modus tollens.' },
+    { id:'AV07', subtes:'AV',
+      pertanyaan:'Jika hujan, jalan basah. Jalan tidak basah. Maka:',
+      opsi:{ a:'Hujan', b:'Tidak hujan', c:'Mungkin hujan',
+             d:'Mungkin gerimis', e:'Tidak dapat disimpulkan' }, kunci:'b' },
+    { id:'AV08', subtes:'AV',
+      pertanyaan:'A > B, B > C, C = D. Hubungan A dan D?',
+      opsi:{ a:'A > D', b:'A < D', c:'A = D', d:'Tidak dapat ditentukan',
+             e:'A ≤ D' }, kunci:'a' },
+
+    /* ========== 4. Penalaran Urutan (PU) ========== */
+    { id:'PU01', subtes:'PU',
+      pertanyaan:'Lanjutan: ○ □ △ ○ □ △ ○ □ ?',
+      opsi:{ a:'○', b:'□', c:'△', d:'◇', e:'☆' }, kunci:'c' },
+    { id:'PU02', subtes:'PU',
+      pertanyaan:'Lanjutan huruf: A C E G I ?',
+      opsi:{ a:'J', b:'K', c:'L', d:'M', e:'N' }, kunci:'b' },
+    { id:'PU03', subtes:'PU',
+      pertanyaan:'Lanjutan: 1A, 2C, 3E, 4G, ?',
+      opsi:{ a:'5H', b:'5I', c:'6I', d:'5K', e:'6K' }, kunci:'b' },
+    { id:'PU04', subtes:'PU',
+      pertanyaan:'Lanjutan: Z Y W T P ?',
+      opsi:{ a:'O', b:'N', c:'M', d:'K', e:'J' },
+      kunci:'d', ket:'Selisih -1,-2,-3,-4,-5.' },
+    { id:'PU05', subtes:'PU',
+      pertanyaan:'Lanjutan: 2 4 8 16 32 ?',
+      opsi:{ a:'48', b:'56', c:'64', d:'72', e:'128' }, kunci:'c' },
+    { id:'PU06', subtes:'PU',
+      pertanyaan:'Lengkapi: J F M A M J J A S O N ?',
+      opsi:{ a:'O', b:'N', c:'D', d:'J', e:'S' },
+      kunci:'c', ket:'Inisial bulan: ...November, Desember.' },
+    { id:'PU07', subtes:'PU',
+      pertanyaan:'Lanjutan: 1, 4, 9, 16, 25, ?',
+      opsi:{ a:'30', b:'32', c:'36', d:'40', e:'49' }, kunci:'c' },
+    { id:'PU08', subtes:'PU',
+      pertanyaan:'Lanjutan pola simbol: ★ ✦ ★ ★ ✦ ✦ ★ ★ ★ ✦ ✦ ?',
+      opsi:{ a:'★', b:'✦', c:'★ ★', d:'✦ ✦', e:'★ ✦' },
+      kunci:'d', ket:'Pola n bintang n permata berurutan; setelah ★★★✦✦ adalah ✦.' },
+
+    /* ========== 5. Pengenalan Spasial (PS) ========== */
+    { id:'PS01', subtes:'PS',
+      pertanyaan:'Persegi panjang 4×3 cm. Berapakah luasnya (cm²)?',
+      opsi:{ a:'7', b:'10', c:'12', d:'14', e:'16' }, kunci:'c' },
+    { id:'PS02', subtes:'PS',
+      pertanyaan:'Sebuah jam analog menunjuk pukul 03:00. Berapa derajat sudut antara jarum pendek dan jarum panjang?',
+      opsi:{ a:'30°', b:'60°', c:'90°', d:'120°', e:'180°' }, kunci:'c' },
+    { id:'PS03', subtes:'PS',
+      pertanyaan:'Bangun yang TIDAK punya simetri lipat?',
+      opsi:{ a:'Lingkaran', b:'Persegi', c:'Segitiga sama sisi',
+             d:'Trapesium sembarang', e:'Belah ketupat' }, kunci:'d' },
+    { id:'PS04', subtes:'PS',
+      pertanyaan:'Persegi diputar 45°, hasilnya tampak seperti?',
+      opsi:{ a:'Persegi panjang', b:'Belah ketupat (persegi miring)',
+             c:'Trapesium', d:'Lingkaran', e:'Segi enam' }, kunci:'b' },
+    { id:'PS05', subtes:'PS',
+      pertanyaan:'Bangun manakah yang dapat menutup bidang datar tanpa celah (tessellation) selain persegi?',
+      opsi:{ a:'Lingkaran', b:'Segitiga sama sisi', c:'Segi lima beraturan',
+             d:'Segi tujuh beraturan', e:'Elips' }, kunci:'b' },
+    { id:'PS06', subtes:'PS',
+      pertanyaan:'Sebuah peta menunjukkan utara di atas. Jika Anda menghadap selatan dan belok kanan, Anda menghadap?',
+      opsi:{ a:'Utara', b:'Selatan', c:'Timur', d:'Barat', e:'Tenggara' }, kunci:'d' },
+
+    /* ========== 6. Tiga Dimensi (TD) ========== */
+    { id:'TD01', subtes:'TD',
+      pertanyaan:'Sebuah kubus dipotong sejajar salah satu sisinya. Bentuk irisan paling sederhana?',
+      opsi:{ a:'Lingkaran', b:'Persegi', c:'Segitiga', d:'Trapesium', e:'Heksagon' }, kunci:'b' },
+    { id:'TD02', subtes:'TD',
+      pertanyaan:'Jaring-jaring kubus terdiri dari berapa persegi?',
+      opsi:{ a:'4', b:'5', c:'6', d:'7', e:'8' }, kunci:'c' },
+    { id:'TD03', subtes:'TD',
+      pertanyaan:'Volume kubus dengan rusuk 5 cm?',
+      opsi:{ a:'25 cm³', b:'75 cm³', c:'100 cm³', d:'125 cm³', e:'150 cm³' }, kunci:'d' },
+    { id:'TD04', subtes:'TD',
+      pertanyaan:'Sebuah dadu standar: jika sisi 1 di atas dan 2 menghadap Anda, sisi yang ada di bawah adalah?',
+      opsi:{ a:'3', b:'4', c:'5', d:'6', e:'2' },
+      kunci:'d', ket:'Sisi berhadapan dadu jumlahnya 7 -> 1 lawan 6.' },
+    { id:'TD05', subtes:'TD',
+      pertanyaan:'Sebuah balok berukuran 3×4×5 cm. Luas permukaan totalnya?',
+      opsi:{ a:'47 cm²', b:'60 cm²', c:'94 cm²', d:'120 cm²', e:'150 cm²' },
+      kunci:'c', ket:'2(3·4+3·5+4·5)=94.' },
+    { id:'TD06', subtes:'TD',
+      pertanyaan:'Tabung dengan jari-jari 7 cm, tinggi 10 cm, volumenya (π=22/7)?',
+      opsi:{ a:'440 cm³', b:'770 cm³', c:'1.540 cm³', d:'2.310 cm³', e:'3.080 cm³' },
+      kunci:'c', ket:'πr²t = 22/7·49·10 = 1540.' },
+
+    /* ========== 7. Sistematisasi (SI) ========== */
+    { id:'SI01', subtes:'SI',
+      pertanyaan:'Urutkan dari terkecil: 0,3 ; 0,03 ; 3 ; 30 ; 0,33',
+      opsi:{ a:'0,03 < 0,3 < 0,33 < 3 < 30',
+             b:'0,03 < 0,33 < 0,3 < 3 < 30',
+             c:'0,3 < 0,03 < 0,33 < 3 < 30',
+             d:'30 < 3 < 0,33 < 0,3 < 0,03',
+             e:'Semua salah' }, kunci:'a' },
+    { id:'SI02', subtes:'SI',
+      pertanyaan:'Susun kata jadi kalimat benar: (1) ke (2) Saya (3) sekolah (4) pergi (5) pagi (6) ini',
+      opsi:{ a:'2-1-3-4-5-6', b:'2-4-1-3-5-6', c:'2-4-1-3-6-5',
+             d:'5-6-2-4-1-3', e:'2-1-4-3-5-6' },
+      kunci:'b', ket:'"Saya pergi ke sekolah pagi ini".' },
+    { id:'SI03', subtes:'SI',
+      pertanyaan:'Manakah pasangan yang sesuai? (analogi: dokter : pasien = ... : ...)',
+      opsi:{ a:'guru : papan tulis', b:'guru : siswa', c:'siswa : buku',
+             d:'sopir : mobil', e:'penjual : barang' }, kunci:'b' },
+    { id:'SI04', subtes:'SI',
+      pertanyaan:'Kelompokkan: A, 5, B, 7, C, 9. Pola berikutnya?',
+      opsi:{ a:'D', b:'10', c:'D, 11', d:'11, D', e:'D dan E' },
+      kunci:'c', ket:'Pola huruf-angka selang-seling.' },
+    { id:'SI05', subtes:'SI',
+      pertanyaan:'Atur file: skripsi.pdf, foto.jpg, lagu.mp3, video.mp4, laporan.docx. Mana ekstensi audio?',
+      opsi:{ a:'.pdf', b:'.jpg', c:'.mp3', d:'.mp4', e:'.docx' }, kunci:'c' },
+    { id:'SI06', subtes:'SI',
+      pertanyaan:'Pasangkan: padi : sawah = ... : ...',
+      opsi:{ a:'ikan : laut', b:'mobil : jalan', c:'pohon : akar',
+             d:'buku : penulis', e:'guru : sekolah' }, kunci:'a' },
+
+    /* ========== 8. Kosa Kata (KK) ========== */
+    { id:'KK01', subtes:'KK',
+      pertanyaan:'Sinonim dari "BISA" yang paling tepat?',
+      opsi:{ a:'mau', b:'akan', c:'dapat', d:'mampu', e:'pasti' },
+      kunci:'c', ket:'"Bisa" = dapat (sinonim langsung).' },
+    { id:'KK02', subtes:'KK',
+      pertanyaan:'Padanan kata "KAMBING" yang paling dekat?',
+      opsi:{ a:'sapi', b:'kuda', c:'domba', d:'keledai', e:'kerbau' },
+      kunci:'c', ket:'Kambing & domba: ukuran & guna mirip.' },
+    { id:'KK03', subtes:'KK',
+      pertanyaan:'Antonim dari "TINGGI"?',
+      opsi:{ a:'pendek', b:'kecil', c:'sempit', d:'lebar', e:'tipis' }, kunci:'a' },
+    { id:'KK04', subtes:'KK',
+      pertanyaan:'Sinonim dari "AKURAT"?',
+      opsi:{ a:'cepat', b:'tepat', c:'lambat', d:'sopan', e:'rajin' }, kunci:'b' },
+    { id:'KK05', subtes:'KK',
+      pertanyaan:'Sinonim dari "EKSPLISIT"?',
+      opsi:{ a:'rahasia', b:'tersirat', c:'jelas', d:'samar', e:'kabur' }, kunci:'c' },
+    { id:'KK06', subtes:'KK',
+      pertanyaan:'Antonim dari "DERMAWAN"?',
+      opsi:{ a:'pelit', b:'rajin', c:'sombong', d:'angkuh', e:'jujur' }, kunci:'a' },
+    { id:'KK07', subtes:'KK',
+      pertanyaan:'Sinonim dari "FANA"?',
+      opsi:{ a:'kekal', b:'sementara', c:'utuh', d:'kuat', e:'mulia' }, kunci:'b' },
+    { id:'KK08', subtes:'KK',
+      pertanyaan:'Padanan "PALING DEKAT" untuk "MELON"?',
+      opsi:{ a:'jeruk', b:'apel', c:'semangka', d:'pisang', e:'mangga' },
+      kunci:'c', ket:'Sama-sama buah cucurbitaceae.' },
+
+    /* ========== 9. Figural Angka (FA) ========== */
+    { id:'FA01', subtes:'FA',
+      pertanyaan:'Berapakah 3 × ½?',
+      opsi:{ a:'1', b:'1½', c:'2', d:'2½', e:'3' }, kunci:'b' },
+    { id:'FA02', subtes:'FA',
+      pertanyaan:'Berapakah 1.4 − 0.9?',
+      opsi:{ a:'0.3', b:'0.4', c:'0.5', d:'0.6', e:'0.7' }, kunci:'c' },
+    { id:'FA03', subtes:'FA',
+      pertanyaan:'Berapakah hasil 6 ÷ 8?',
+      opsi:{ a:'0,50', b:'0,60', c:'0,75', d:'0,80', e:'1,33' }, kunci:'c' },
+    { id:'FA04', subtes:'FA',
+      pertanyaan:'Berapakah 0,09 ÷ 0,3?',
+      opsi:{ a:'0,03', b:'0,3', c:'0,03', d:'3', e:'0,3' },
+      kunci:'b', ket:'9/30 = 0,3.' },
+    { id:'FA05', subtes:'FA',
+      pertanyaan:'Anda membayar Rp 50.000 untuk barang seharga Rp 1.999. Berapa kembalian (paling mendekati)?',
+      opsi:{ a:'Rp 47.001', b:'Rp 48.001', c:'Rp 49.001',
+             d:'Rp 48.001', e:'Rp 50.000' }, kunci:'b' },
+    { id:'FA06', subtes:'FA',
+      pertanyaan:'Harga barang setelah diskon 60% adalah Rp 126.000. Harga aslinya?',
+      opsi:{ a:'Rp 200.000', b:'Rp 252.000', c:'Rp 300.000',
+             d:'Rp 315.000', e:'Rp 420.000' },
+      kunci:'d', ket:'126.000 = 40% × X -> X = 315.000.' },
+    { id:'FA07', subtes:'FA',
+      pertanyaan:'Sebuah mobil menempuh 240 km dalam 4 jam. Kecepatan rata-rata?',
+      opsi:{ a:'40 km/jam', b:'50 km/jam', c:'60 km/jam',
+             d:'70 km/jam', e:'80 km/jam' }, kunci:'c' },
+    { id:'FA08', subtes:'FA',
+      pertanyaan:'Jika 3 pekerja menyelesaikan tugas dalam 6 hari, berapa hari yang dibutuhkan 6 pekerja?',
+      opsi:{ a:'2 hari', b:'3 hari', c:'4 hari', d:'5 hari', e:'12 hari' }, kunci:'b' }
+  ];
+}
