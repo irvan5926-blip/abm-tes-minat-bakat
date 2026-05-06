@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Menu - ABM Tes Minat & Bakat</title>
+<?!= include('styles'); ?>
+</head>
+<body>
+<div class="app-shell">
+  <div class="app-header">
+    <div>
+      <h1 id="hi">Halo, Siswa</h1>
+      <div class="sub" id="siswaInfo"></div>
+    </div>
+    <div class="right">
+      <span class="timer" id="timer">--:--</span>
+      <button class="btn outline small" id="btnLogout" style="margin-left:0.5rem;background:white;color:var(--c-text)">Keluar</button>
+    </div>
+  </div>
+
+  <div id="alerts"></div>
+
+  <div class="card">
+    <h2>Pilih Menu Tes</h2>
+    <p class="muted">Token Anda berlaku untuk salah satu jenis tes (sesuai
+    permintaan admin). Pastikan koneksi internet stabil sebelum memulai.</p>
+
+    <div class="menu-grid">
+      <a class="menu-card" id="cardMinat" href="#">
+        <div class="ico">🌱</div>
+        <h2>Tes Minat</h2>
+        <p class="muted">Mengukur ketertarikan terhadap aktivitas/pekerjaan.
+        28 pasang kata + program detail per bidang dominan.</p>
+      </a>
+      <a class="menu-card" id="cardBakat" href="#">
+        <div class="ico">🎯</div>
+        <h2>Tes Bakat</h2>
+        <p class="muted">Mengukur 7 dimensi bakat ABM melalui 9 subtes.
+        Ada prediksi IQ pada laporan akhir (laporan diunduh oleh admin).</p>
+      </a>
+    </div>
+
+    <hr>
+    <p class="muted">Catatan:
+      <ul class="muted">
+        <li>Token akan otomatis dipakai (TERPAKAI) saat tombol "Mulai" ditekan.</li>
+        <li>Soal akan diacak otomatis. Setiap siswa mendapat urutan yang berbeda.</li>
+        <li>Anda bisa menutup browser dan kembali dalam waktu valid token; sesi tersimpan.</li>
+      </ul>
+    </p>
+  </div>
+
+  <footer class="app-footer">
+    <a href="?page=panduan" target="_blank">Buku Panduan Penggunaan</a>
+  </footer>
+</div>
+
+<script>
+function $(id){return document.getElementById(id);}
+function showAlert(type, msg){
+  $('alerts').innerHTML = '<div class="alert ' + type + '">' + msg + '</div>';
+}
+
+var token = sessionStorage.getItem('abm_token');
+var jenisToken = sessionStorage.getItem('abm_token_jenis');
+var expIso = sessionStorage.getItem('abm_token_exp');
+var siswa;
+try { siswa = JSON.parse(sessionStorage.getItem('abm_siswa') || '{}'); } catch(e) { siswa = {}; }
+
+if (!token || !jenisToken) location.href = '?page=login';
+
+$('hi').textContent = 'Halo, ' + (siswa.nama || 'Siswa');
+$('siswaInfo').textContent = [siswa.kelas, siswa.sekolah].filter(Boolean).join(' - ');
+
+// Aktifkan kartu sesuai jenis token
+if (jenisToken === 'minat') {
+  $('cardBakat').classList.add('disabled');
+  $('cardBakat').title = 'Token Anda hanya untuk Tes Minat';
+} else if (jenisToken === 'bakat') {
+  $('cardMinat').classList.add('disabled');
+  $('cardMinat').title = 'Token Anda hanya untuk Tes Bakat';
+}
+
+$('cardMinat').addEventListener('click', function(e){ e.preventDefault(); startTest(); });
+$('cardBakat').addEventListener('click', function(e){ e.preventDefault(); startTest(); });
+
+function startTest(){
+  showAlert('info', 'Memuat soal... <span class="spinner"></span>');
+  google.script.run.withSuccessHandler(function(r){
+    if(!r.ok){ showAlert('error', r.msg); return; }
+    sessionStorage.setItem('abm_sesi_id', r.sesi_id);
+    sessionStorage.setItem('abm_sesi_jenis', r.jenis_tes);
+    sessionStorage.setItem('abm_sesi_data', JSON.stringify(r));
+    location.href = '?page=test';
+  }).withFailureHandler(function(e){
+    showAlert('error', 'Server error: ' + e.message);
+  }).startSession(token);
+}
+
+// Timer countdown sampai expires_at
+function updateTimer(){
+  if(!expIso){ $('timer').textContent = '--:--'; return; }
+  var diff = Math.max(0, Math.round((new Date(expIso).getTime() - Date.now()) / 1000));
+  var mm = Math.floor(diff/60), ss = diff%60;
+  $('timer').textContent = (mm<10?'0':'') + mm + ':' + (ss<10?'0':'') + ss;
+  $('timer').classList.remove('warn','danger');
+  if(diff <= 60) $('timer').classList.add('warn');
+  if(diff <= 30) { $('timer').classList.remove('warn'); $('timer').classList.add('danger'); }
+  if(diff <= 0) {
+    showAlert('error', 'Token sudah expired. Silakan minta token baru.');
+    setTimeout(function(){ location.href='?page=login'; }, 2500);
+  }
+}
+updateTimer();
+setInterval(updateTimer, 1000);
+
+$('btnLogout').addEventListener('click', function(){
+  sessionStorage.clear();
+  location.href = '?page=login';
+});
+</script>
+</body>
+</html>

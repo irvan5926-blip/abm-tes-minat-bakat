@@ -1,0 +1,421 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Admin Dashboard - ABM</title>
+<?!= include('styles'); ?>
+<style>
+.tabs { display:flex; gap: 0.25rem; border-bottom: 2px solid var(--c-primary-3); margin-bottom: 1rem; }
+.tab { padding: 0.6rem 1rem; cursor: pointer; border-bottom: 3px solid transparent; color: var(--c-muted); }
+.tab.active { color: var(--c-accent); border-color: var(--c-primary); font-weight: 600; }
+.stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+.stat-card { background: var(--c-card); padding: 1rem; border-radius: 8px; box-shadow: var(--shadow); border-left: 4px solid var(--c-primary); }
+.stat-num { font-size: 2rem; font-weight: 700; color: var(--c-accent); }
+.stat-lab { font-size: 0.85rem; color: var(--c-muted); }
+.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 50; }
+.modal { background: white; border-radius: 12px; padding: 2rem; max-width: 600px; width: 90%; box-shadow: 0 10px 30px rgba(0,0,0,0.2); max-height: 90vh; overflow-y: auto; }
+.token-result { background: var(--c-primary-3); padding: 1rem; border-radius: 8px; text-align: center; margin-top: 1rem; }
+.token-result .big { font-size: 2.2rem; font-weight: bold; letter-spacing: 0.4rem; color: var(--c-accent); margin: 0.5rem 0; font-family: 'Courier New', monospace; }
+</style>
+</head>
+<body>
+<div class="app-shell">
+  <div class="app-header">
+    <div>
+      <h1>Admin Dashboard - ABM</h1>
+      <div class="sub" id="adminInfo"></div>
+    </div>
+    <div class="right">
+      <button class="btn outline small" id="btnChangePw" style="background:white;color:var(--c-text)">Ubah Password</button>
+      <button class="btn outline small" id="btnLogout" style="background:white;color:var(--c-text);margin-left:0.4rem">Logout</button>
+    </div>
+  </div>
+
+  <div id="alerts"></div>
+
+  <div class="stats-row" id="statsRow"></div>
+
+  <div class="tabs">
+    <div class="tab active" data-tab="generate">Buat Token</div>
+    <div class="tab" data-tab="tokens">Daftar Token</div>
+    <div class="tab" data-tab="hasil">Hasil & Laporan</div>
+  </div>
+
+  <!-- TAB: Generate Token -->
+  <div id="tab-generate" class="card">
+    <h2>Buat Token Tes Siswa</h2>
+    <p class="muted">Token aktif <b>5 menit</b> setelah dibuat. Sekali pakai.</p>
+
+    <div class="row">
+      <div class="col-2">
+        <label>Jenis Tes</label>
+        <select class="input" id="genJenis">
+          <option value="minat">Tes Minat</option>
+          <option value="bakat">Tes Bakat</option>
+        </select>
+      </div>
+      <div class="col-2">
+        <label>Nama Siswa <span style="color:#E53935">*</span></label>
+        <input class="input" id="genNama" placeholder="Nama lengkap siswa">
+      </div>
+      <div class="col-2">
+        <label>NIS</label>
+        <input class="input" id="genNis">
+      </div>
+      <div class="col-2">
+        <label>Kelas</label>
+        <input class="input" id="genKelas" placeholder="Misal: IX-A">
+      </div>
+    </div>
+    <div class="row">
+      <div class="col-2">
+        <label>Sekolah</label>
+        <input class="input" id="genSekolah">
+      </div>
+      <div class="col-2" style="align-self:flex-end">
+        <button class="btn block" id="btnGen">Buat Token</button>
+      </div>
+    </div>
+
+    <div id="tokenResult"></div>
+  </div>
+
+  <!-- TAB: Daftar Token -->
+  <div id="tab-tokens" class="card" style="display:none">
+    <h2>Daftar Token</h2>
+    <button class="btn outline small" id="btnRefreshTokens">↻ Refresh</button>
+    <div style="overflow-x:auto;margin-top:0.75rem">
+      <table class="table" id="tableTokens">
+        <thead><tr>
+          <th>Token</th><th>Jenis</th><th>Siswa</th><th>NIS</th><th>Kelas</th>
+          <th>Dibuat</th><th>Expired</th><th>Status</th><th>Aksi</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- TAB: Hasil -->
+  <div id="tab-hasil" class="card" style="display:none">
+    <h2>Hasil & Laporan</h2>
+    <div class="row" style="align-items:flex-end">
+      <div class="col-2">
+        <label>Filter Jenis Tes</label>
+        <select class="input" id="filterJenis">
+          <option value="">Semua</option>
+          <option value="bakat">Bakat</option>
+          <option value="minat">Minat</option>
+        </select>
+      </div>
+      <div class="col-2">
+        <button class="btn outline" id="btnRefreshHasil">↻ Refresh</button>
+      </div>
+    </div>
+    <div style="overflow-x:auto;margin-top:0.75rem">
+      <table class="table" id="tableHasil">
+        <thead><tr>
+          <th>ID</th><th>Tanggal</th><th>Siswa</th><th>NIS</th><th>Kelas</th>
+          <th>Jenis</th><th>IQ</th><th>Ringkasan</th><th>Aksi</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <footer class="app-footer">
+    Versi <span id="ver">-</span> &middot;
+    <a href="?page=panduan" target="_blank">Panduan Penggunaan</a>
+  </footer>
+</div>
+
+<!-- Modal Ubah Password -->
+<div class="modal-overlay" id="modalPw" style="display:none">
+  <div class="modal">
+    <h2>Ubah Password</h2>
+    <label>Password Lama</label>
+    <input class="input" id="pwOld" type="password">
+    <div class="spacer"></div>
+    <label>Password Baru (min 6 karakter)</label>
+    <input class="input" id="pwNew" type="password">
+    <div class="spacer"></div>
+    <div class="right">
+      <button class="btn outline" id="btnPwCancel">Batal</button>
+      <button class="btn" id="btnPwSubmit">Simpan</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal Detail Hasil -->
+<div class="modal-overlay" id="modalDetail" style="display:none">
+  <div class="modal" style="max-width:800px">
+    <h2 id="modalDetailTitle">Detail Hasil</h2>
+    <div id="modalDetailBody"></div>
+    <div class="right" style="margin-top:1rem">
+      <button class="btn outline" id="btnDetailClose">Tutup</button>
+      <button class="btn" id="btnDetailDownload">⬇ Download PDF</button>
+    </div>
+  </div>
+</div>
+
+<script>
+function $(id){return document.getElementById(id);}
+function showAlert(type, msg){
+  $('alerts').innerHTML = '<div class="alert ' + type + '">' + msg + '</div>';
+  window.scrollTo({top:0,behavior:'smooth'});
+  setTimeout(function(){ $('alerts').innerHTML = ''; }, 5000);
+}
+function fmtDate(s){
+  if(!s) return '-';
+  var d = new Date(s);
+  return isNaN(d) ? s : d.toLocaleString('id-ID', { dateStyle:'short', timeStyle:'short' });
+}
+function escapeHtml(s){
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
+    return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c];
+  });
+}
+
+var sess = sessionStorage.getItem('abm_admin_session');
+if (!sess) location.href = '?page=login';
+$('adminInfo').textContent = (sessionStorage.getItem('abm_admin_nama') || '') +
+  ' (' + (sessionStorage.getItem('abm_admin_email') || '') + ')';
+
+google.script.run.withSuccessHandler(function(r){ $('ver').textContent = r.version; }).ping();
+
+// Tabs
+document.querySelectorAll('.tab').forEach(function(t){
+  t.addEventListener('click', function(){
+    document.querySelectorAll('.tab').forEach(function(x){ x.classList.remove('active'); });
+    t.classList.add('active');
+    ['generate','tokens','hasil'].forEach(function(id){
+      $('tab-' + id).style.display = (id === t.dataset.tab) ? 'block' : 'none';
+    });
+    if (t.dataset.tab === 'tokens') loadTokens();
+    if (t.dataset.tab === 'hasil') loadHasil();
+  });
+});
+
+// Logout
+$('btnLogout').addEventListener('click', function(){
+  google.script.run.adminLogout(sess);
+  sessionStorage.clear();
+  location.href = '?page=login';
+});
+
+// Stats
+function loadStats(){
+  google.script.run.withSuccessHandler(function(s){
+    var html = '';
+    html += statCard(s.total_token, 'Total Token');
+    html += statCard(s.token_aktif, 'Token Aktif');
+    html += statCard(s.token_terpakai, 'Token Terpakai');
+    html += statCard(s.total_siswa, 'Total Siswa');
+    html += statCard(s.total_hasil_bakat, 'Hasil Tes Bakat');
+    html += statCard(s.total_hasil_minat, 'Hasil Tes Minat');
+    $('statsRow').innerHTML = html;
+  }).withFailureHandler(function(e){
+    showAlert('error', 'Gagal load stats: ' + e.message);
+  }).adminGetStats(sess);
+}
+function statCard(num, lab){
+  return '<div class="stat-card"><div class="stat-num">' + num + '</div>' +
+         '<div class="stat-lab">' + lab + '</div></div>';
+}
+loadStats();
+
+// Generate token
+$('btnGen').addEventListener('click', function(){
+  var nama = $('genNama').value.trim();
+  if (!nama){ showAlert('warn', 'Nama siswa wajib diisi.'); return; }
+  $('btnGen').disabled = true; $('btnGen').innerHTML = '<span class="spinner"></span> Membuat...';
+  google.script.run.withSuccessHandler(function(r){
+    $('btnGen').disabled = false; $('btnGen').textContent = 'Buat Token';
+    if (!r.ok){ showAlert('error', r.msg); return; }
+    var html = '<div class="token-result">' +
+      '<div class="muted">Token tes siswa (berlaku 5 menit, sekali pakai):</div>' +
+      '<div class="big">' + escapeHtml(r.token) + '</div>' +
+      '<div>Expired: <b>' + new Date(r.expires_at).toLocaleString('id-ID') + '</b></div>' +
+      '<button class="btn small outline" id="btnCopyTok" style="margin-top:0.5rem">📋 Copy Token</button>' +
+      '</div>';
+    $('tokenResult').innerHTML = html;
+    $('btnCopyTok').addEventListener('click', function(){
+      navigator.clipboard.writeText(r.token).then(function(){
+        showAlert('success', 'Token disalin ke clipboard.');
+      });
+    });
+    $('genNama').value = ''; $('genNis').value = ''; $('genKelas').value = '';
+    loadStats();
+  }).withFailureHandler(function(e){
+    $('btnGen').disabled = false; $('btnGen').textContent = 'Buat Token';
+    showAlert('error', 'Server error: ' + e.message);
+  }).generateToken(sess, {
+    jenis_tes: $('genJenis').value,
+    siswa_nama: nama,
+    siswa_nis: $('genNis').value.trim(),
+    siswa_kelas: $('genKelas').value.trim(),
+    siswa_sekolah: $('genSekolah').value.trim()
+  });
+});
+
+// Tokens table
+function loadTokens(){
+  $('tableTokens').querySelector('tbody').innerHTML =
+    '<tr><td colspan="9" class="center"><span class="spinner"></span> Memuat...</td></tr>';
+  google.script.run.withSuccessHandler(function(rows){
+    var tb = $('tableTokens').querySelector('tbody');
+    if (!rows.length){
+      tb.innerHTML = '<tr><td colspan="9" class="center muted">Belum ada token.</td></tr>';
+      return;
+    }
+    tb.innerHTML = rows.map(function(r){
+      var st = r.status || '-';
+      var stCls = st.toLowerCase();
+      var aksi = (st === 'AKTIF')
+        ? '<button class="btn small danger btn-cancel-tok" data-tok="' + escapeHtml(r.token) + '">Batalkan</button>'
+        : '<span class="muted">-</span>';
+      return '<tr>' +
+        '<td><b>' + escapeHtml(r.token) + '</b></td>' +
+        '<td>' + escapeHtml(r.jenis_tes) + '</td>' +
+        '<td>' + escapeHtml(r.siswa_nama) + '</td>' +
+        '<td>' + escapeHtml(r.siswa_nis) + '</td>' +
+        '<td>' + escapeHtml(r.siswa_kelas) + '</td>' +
+        '<td>' + fmtDate(r.created_at) + '</td>' +
+        '<td>' + fmtDate(r.expires_at) + '</td>' +
+        '<td><span class="badge ' + stCls + '">' + st + '</span></td>' +
+        '<td>' + aksi + '</td>' +
+        '</tr>';
+    }).join('');
+    document.querySelectorAll('.btn-cancel-tok').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        if (!confirm('Batalkan token ' + btn.dataset.tok + '?')) return;
+        google.script.run.withSuccessHandler(function(r){
+          showAlert('success', 'Token dibatalkan.');
+          loadTokens(); loadStats();
+        }).adminCancelToken(sess, btn.dataset.tok);
+      });
+    });
+  }).withFailureHandler(function(e){
+    showAlert('error', 'Gagal load: ' + e.message);
+  }).adminListTokens(sess);
+}
+$('btnRefreshTokens').addEventListener('click', loadTokens);
+
+// Hasil
+function loadHasil(){
+  $('tableHasil').querySelector('tbody').innerHTML =
+    '<tr><td colspan="9" class="center"><span class="spinner"></span> Memuat...</td></tr>';
+  google.script.run.withSuccessHandler(function(rows){
+    var tb = $('tableHasil').querySelector('tbody');
+    if (!rows.length){
+      tb.innerHTML = '<tr><td colspan="9" class="center muted">Belum ada hasil tes.</td></tr>';
+      return;
+    }
+    tb.innerHTML = rows.map(function(r){
+      return '<tr>' +
+        '<td><span class="muted">' + escapeHtml(r.hasil_id) + '</span></td>' +
+        '<td>' + fmtDate(r.created_at) + '</td>' +
+        '<td><b>' + escapeHtml(r.siswa_nama) + '</b></td>' +
+        '<td>' + escapeHtml(r.siswa_nis) + '</td>' +
+        '<td>' + escapeHtml(r.siswa_kelas) + '</td>' +
+        '<td>' + escapeHtml(r.jenis_tes) + '</td>' +
+        '<td>' + (r.iq_prediksi || '-') + '</td>' +
+        '<td>' + escapeHtml(r.ringkasan_klasifikasi || '-') + '</td>' +
+        '<td>' +
+          '<button class="btn small btn-detail" data-id="' + escapeHtml(r.hasil_id) + '">Detail</button> ' +
+          '<button class="btn small outline btn-pdf" data-id="' + escapeHtml(r.hasil_id) + '">⬇ PDF</button>' +
+        '</td></tr>';
+    }).join('');
+    document.querySelectorAll('.btn-pdf').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        downloadPdf(btn.dataset.id);
+      });
+    });
+    document.querySelectorAll('.btn-detail').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        showDetail(btn.dataset.id);
+      });
+    });
+  }).withFailureHandler(function(e){
+    showAlert('error', 'Gagal load: ' + e.message);
+  }).adminListHasil(sess, { jenis_tes: $('filterJenis').value || null });
+}
+$('btnRefreshHasil').addEventListener('click', loadHasil);
+$('filterJenis').addEventListener('change', loadHasil);
+
+function downloadPdf(hasilId){
+  showAlert('info', 'Membuat PDF... <span class="spinner"></span>');
+  google.script.run.withSuccessHandler(function(r){
+    if (!r.ok){ showAlert('error', r.msg); return; }
+    var byteChars = atob(r.base64);
+    var bytes = new Uint8Array(byteChars.length);
+    for (var i = 0; i < byteChars.length; i++) bytes[i] = byteChars.charCodeAt(i);
+    var blob = new Blob([bytes], { type: r.mime || 'application/pdf' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = r.filename;
+    document.body.appendChild(a); a.click();
+    setTimeout(function(){ URL.revokeObjectURL(url); a.remove(); }, 1000);
+    showAlert('success', 'PDF terunduh.');
+  }).withFailureHandler(function(e){
+    showAlert('error', 'Gagal membuat PDF: ' + e.message);
+  }).downloadReport(sess, hasilId);
+}
+
+var lastDetailId = '';
+function showDetail(hasilId){
+  lastDetailId = hasilId;
+  $('modalDetail').style.display = 'flex';
+  $('modalDetailBody').innerHTML = '<div class="center"><span class="spinner"></span> Memuat...</div>';
+  google.script.run.withSuccessHandler(function(r){
+    if (!r.ok){ $('modalDetailBody').innerHTML = '<div class="alert error">' + r.msg + '</div>'; return; }
+    var s = r.siswa, hasil = r.hasil;
+    var html = '<p><b>' + escapeHtml(s.nama) + '</b> &middot; ' + escapeHtml(s.kelas || '-') +
+      ' &middot; ' + escapeHtml(s.sekolah || '-') + '</p>';
+    if (hasil.jenis_tes === 'bakat'){
+      html += '<h3>IQ Prediksi: ' + hasil.iq_prediksi + '</h3>';
+      html += '<table class="table"><thead><tr><th>Dimensi</th><th>Skor</th><th>Klasifikasi</th></tr></thead><tbody>';
+      Object.keys(r.klasifikasi).forEach(function(d){
+        var k = r.klasifikasi[d];
+        var cls = k.klasifikasi === 'Tinggi' ? 'tinggi' : k.klasifikasi === 'Rendah' ? 'rendah' : 'sedang';
+        html += '<tr><td>' + escapeHtml(d) + '</td><td>' + (k.skor || 0) + '</td>' +
+                '<td><span class="badge ' + cls + '">' + escapeHtml(k.klasifikasi) + '</span></td></tr>';
+      });
+      html += '</tbody></table>';
+    } else {
+      html += '<h3>3 Bidang Minat Dominan</h3><ol>';
+      (r.klasifikasi.top_3_bidang || []).forEach(function(b){
+        html += '<li><b>' + escapeHtml(b.nama) + '</b> (skor: ' + b.skor + ')</li>';
+      });
+      html += '</ol>';
+      html += '<h3>Rekomendasi</h3><ul>';
+      (r.rekomendasi.program_keahlian || []).forEach(function(p){
+        html += '<li><b>' + escapeHtml(p.bidang) + ':</b> ' + escapeHtml(p.rekomendasi_pekerjaan) +
+                ' &rarr; <i>' + escapeHtml(p.rekomendasi_keahlian) + '</i></li>';
+      });
+      html += '</ul>';
+    }
+    $('modalDetailBody').innerHTML = html;
+  }).adminGetHasilDetail(sess, hasilId);
+}
+$('btnDetailClose').addEventListener('click', function(){ $('modalDetail').style.display = 'none'; });
+$('btnDetailDownload').addEventListener('click', function(){
+  if (lastDetailId) downloadPdf(lastDetailId);
+});
+
+// Change password
+$('btnChangePw').addEventListener('click', function(){ $('modalPw').style.display = 'flex'; });
+$('btnPwCancel').addEventListener('click', function(){ $('modalPw').style.display = 'none'; });
+$('btnPwSubmit').addEventListener('click', function(){
+  var oldP = $('pwOld').value, newP = $('pwNew').value;
+  if (!oldP || !newP){ alert('Isi password lama & baru.'); return; }
+  google.script.run.withSuccessHandler(function(r){
+    if (!r.ok){ alert(r.msg); return; }
+    alert('Password berhasil diubah.');
+    $('modalPw').style.display = 'none';
+    $('pwOld').value = ''; $('pwNew').value = '';
+  }).adminChangePassword(sess, oldP, newP);
+});
+</script>
+</body>
+</html>

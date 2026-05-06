@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pengerjaan Tes - ABM</title>
+<?!= include('styles'); ?>
+</head>
+<body>
+<div class="app-shell">
+  <div class="app-header">
+    <div>
+      <h1 id="judul">Pengerjaan Tes</h1>
+      <div class="sub" id="sub"></div>
+    </div>
+    <div class="right">
+      <span class="badge" id="progressTxt">0/0</span>
+    </div>
+  </div>
+
+  <div id="alerts"></div>
+
+  <div class="progress-bar"><div class="fill" id="progressFill" style="width:0%"></div></div>
+
+  <div id="container"></div>
+
+  <div class="card center">
+    <button class="btn" id="btnPrev">← Sebelumnya</button>
+    <button class="btn" id="btnNext">Selanjutnya →</button>
+    <button class="btn danger" id="btnSubmit" style="display:none">Selesai &amp; Submit</button>
+  </div>
+
+  <footer class="app-footer">
+    <span class="muted">Jawaban Anda otomatis tersimpan setiap kali Anda memilih.</span>
+  </footer>
+</div>
+
+<script>
+function $(id){return document.getElementById(id);}
+function showAlert(type, msg){
+  $('alerts').innerHTML = '<div class="alert ' + type + '">' + msg + '</div>';
+  setTimeout(function(){ $('alerts').innerHTML = ''; }, 4000);
+}
+
+var sesiId = sessionStorage.getItem('abm_sesi_id');
+var jenis = sessionStorage.getItem('abm_sesi_jenis');
+var data;
+try { data = JSON.parse(sessionStorage.getItem('abm_sesi_data') || '{}'); } catch(e){ data = {}; }
+if (!sesiId || !data.soal) location.href = '?page=menu';
+
+var idx = 0;
+var soalList = data.soal;
+var jawaban = {}; // soal_id -> pilihan
+var minatTahapState = {
+  current: data.tahap || 'BIDANG_1', // BIDANG_1 atau PROGRAM_X
+  programNama: ''
+};
+
+setHeading();
+render();
+
+function setHeading(){
+  if (jenis === 'bakat'){
+    $('judul').textContent = 'Tes Bakat';
+    $('sub').textContent = '9 Subtes - 7 Dimensi Bakat ABM';
+  } else {
+    if (minatTahapState.current === 'BIDANG_1') {
+      $('judul').textContent = 'Tes Minat - Bidang Soal 1';
+      $('sub').textContent = 'Pilih satu kata yang paling Anda sukai dari setiap pasangan.';
+    } else {
+      $('judul').textContent = 'Tes Minat - Program ' + minatTahapState.programNama;
+      $('sub').textContent = 'Pilih satu pekerjaan yang paling Anda sukai dari setiap pasangan.';
+    }
+  }
+}
+
+function render(){
+  if (idx < 0) idx = 0;
+  if (idx >= soalList.length) idx = soalList.length - 1;
+  var s = soalList[idx];
+  var html;
+  if (jenis === 'bakat'){
+    html = renderBakat(s);
+  } else {
+    html = renderMinat(s);
+  }
+  $('container').innerHTML = html;
+  $('progressTxt').textContent = (idx+1) + '/' + soalList.length;
+  $('progressFill').style.width = (((idx+1)/soalList.length)*100) + '%';
+  $('btnPrev').disabled = (idx === 0);
+  $('btnNext').style.display = (idx === soalList.length-1) ? 'none' : 'inline-block';
+  $('btnSubmit').style.display = (idx === soalList.length-1) ? 'inline-block' : 'none';
+  attachAnswerHandlers(s);
+}
+
+function renderBakat(s){
+  var subtesNama = '';
+  if (data.subtes_meta){
+    var meta = data.subtes_meta.find(function(m){ return m.kode === s.subtes; });
+    if (meta) subtesNama = meta.nama + ' (Dimensi: ' + meta.dimensi + ')';
+  }
+  var opsiHtml = '';
+  ['a','b','c','d','e'].forEach(function(k){
+    if (!s.opsi[k]) return;
+    var checked = (jawaban[s.id] === k) ? 'checked' : '';
+    var liClass = checked ? 'checked' : '';
+    opsiHtml += '<li class="' + liClass + '">' +
+      '<label class="opsi-label">' +
+        '<input type="radio" name="opsi" value="' + k + '" ' + checked + '>' +
+        '<span class="opsi-text"><b>' + k.toUpperCase() + '.</b> ' +
+          escapeHtml(s.opsi[k]) +
+        '</span>' +
+      '</label></li>';
+  });
+  return '<div class="soal-card">' +
+    '<div class="muted">' + escapeHtml(subtesNama) + '</div>' +
+    '<div class="soal-no">Soal ' + s.no_tampil + ' dari ' + soalList.length + '</div>' +
+    '<div class="soal-pertanyaan">' + escapeHtml(s.pertanyaan) + '</div>' +
+    '<ul class="opsi-list">' + opsiHtml + '</ul>' +
+    '</div>';
+}
+
+function renderMinat(s){
+  var sela = (jawaban[s.id] === 'A') ? 'selected' : '';
+  var selb = (jawaban[s.id] === 'B') ? 'selected' : '';
+  return '<div class="soal-card">' +
+    '<div class="soal-no">Soal ' + s.no_tampil + ' dari ' + soalList.length + '</div>' +
+    '<div class="soal-pertanyaan">Mana yang lebih Anda sukai?</div>' +
+    '<div class="minat-pair">' +
+      '<button class="' + sela + '" data-pick="A">' + escapeHtml(s.kata_a) + '</button>' +
+      '<button class="' + selb + '" data-pick="B">' + escapeHtml(s.kata_b) + '</button>' +
+    '</div></div>';
+}
+
+function attachAnswerHandlers(s){
+  if (jenis === 'bakat'){
+    document.querySelectorAll('input[name="opsi"]').forEach(function(el){
+      el.addEventListener('change', function(){
+        jawaban[s.id] = el.value;
+        // visual update
+        document.querySelectorAll('.opsi-list li').forEach(function(li){ li.classList.remove('checked'); });
+        el.closest('li').classList.add('checked');
+        saveAnswer(s.id, el.value);
+      });
+    });
+  } else {
+    document.querySelectorAll('.minat-pair button').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        var v = btn.getAttribute('data-pick');
+        jawaban[s.id] = v;
+        document.querySelectorAll('.minat-pair button').forEach(function(b){ b.classList.remove('selected'); });
+        btn.classList.add('selected');
+        saveAnswer(s.id, v);
+        // auto-advance
+        if (idx < soalList.length-1) setTimeout(function(){ idx++; render(); }, 220);
+      });
+    });
+  }
+}
+
+function saveAnswer(soalId, val){
+  google.script.run.withFailureHandler(function(e){
+    showAlert('warn', 'Gagal menyimpan jawaban: ' + e.message);
+  }).submitJawaban(sesiId, soalId, val);
+}
+
+$('btnPrev').addEventListener('click', function(){ idx--; render(); });
+$('btnNext').addEventListener('click', function(){ idx++; render(); });
+
+$('btnSubmit').addEventListener('click', function(){
+  // Pastikan semua terjawab
+  var unanswered = soalList.filter(function(s){ return !jawaban[s.id]; });
+  if (unanswered.length){
+    if (!confirm('Masih ada ' + unanswered.length + ' soal yang belum dijawab. Tetap submit?')) return;
+  }
+  $('btnSubmit').disabled = true;
+  $('btnSubmit').innerHTML = '<span class="spinner"></span> Memproses...';
+
+  if (jenis === 'bakat'){
+    google.script.run.withSuccessHandler(function(r){
+      if(!r.ok){
+        $('btnSubmit').disabled = false;
+        $('btnSubmit').textContent = 'Selesai & Submit';
+        showAlert('error', r.msg);
+        return;
+      }
+      sessionStorage.setItem('abm_hasil_id', r.hasil_id);
+      sessionStorage.setItem('abm_hasil_ringkasan', JSON.stringify(r.ringkasan));
+      location.href = '?page=result';
+    }).withFailureHandler(function(e){
+      $('btnSubmit').disabled = false;
+      $('btnSubmit').textContent = 'Selesai & Submit';
+      showAlert('error', 'Server error: ' + e.message);
+    }).finishBakat(sesiId);
+  } else {
+    handleMinatNextOrFinish();
+  }
+});
+
+function handleMinatNextOrFinish(){
+  // Submit tahap saat ini, lalu minta program berikutnya. Server tahu state.
+  var completed = (minatTahapState.current === 'BIDANG_1') ? null
+                  : minatTahapState.current.replace('PROGRAM_','');
+  google.script.run.withSuccessHandler(function(r){
+    if(!r.ok){
+      $('btnSubmit').disabled = false;
+      $('btnSubmit').textContent = 'Selesai & Submit';
+      showAlert('error', r.msg);
+      return;
+    }
+    if (r.done){
+      // semua program selesai - finish
+      google.script.run.withSuccessHandler(function(rr){
+        if(!rr.ok){ showAlert('error', rr.msg); return; }
+        sessionStorage.setItem('abm_hasil_id', rr.hasil_id);
+        sessionStorage.setItem('abm_hasil_ringkasan', JSON.stringify(rr.ringkasan));
+        location.href = '?page=result';
+      }).finishMinat(sesiId);
+      return;
+    }
+    // load program baru
+    soalList = r.soal;
+    jawaban = {};
+    idx = 0;
+    minatTahapState = { current: 'PROGRAM_' + r.program_kode, programNama: r.program_nama };
+    setHeading();
+    render();
+    showAlert('success', 'Lanjut ke Program: ' + r.program_nama);
+    $('btnSubmit').disabled = false;
+    $('btnSubmit').textContent = 'Selesai & Submit';
+  }).withFailureHandler(function(e){
+    $('btnSubmit').disabled = false;
+    $('btnSubmit').textContent = 'Selesai & Submit';
+    showAlert('error', 'Server error: ' + e.message);
+  }).nextMinatProgram(sesiId, completed);
+}
+
+function escapeHtml(s){
+  return String(s == null ? '' : s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+// Cegah accidental close
+window.addEventListener('beforeunload', function(e){
+  e.preventDefault();
+  e.returnValue = '';
+});
+</script>
+</body>
+</html>

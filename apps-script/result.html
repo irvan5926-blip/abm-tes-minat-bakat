@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hasil - ABM Tes Minat & Bakat</title>
+<?!= include('styles'); ?>
+</head>
+<body>
+<div class="app-shell">
+  <div class="app-header">
+    <div>
+      <h1>Tes Selesai - Terima Kasih!</h1>
+      <div class="sub" id="sub"></div>
+    </div>
+    <div class="right">
+      <a class="btn outline small" href="?page=login" style="background:white;color:var(--c-text)">Selesai</a>
+    </div>
+  </div>
+
+  <div class="card">
+    <div id="ringkasan"></div>
+    <hr>
+    <p class="muted">Laporan lengkap (PDF) hanya dapat diunduh oleh admin /
+    guru BK. Silakan menemui guru BK Anda untuk menerima salinan resmi.</p>
+  </div>
+
+  <footer class="app-footer">
+    <a href="?page=panduan" target="_blank">Panduan Penggunaan</a>
+  </footer>
+</div>
+
+<script>
+function $(id){return document.getElementById(id);}
+var hasilId = sessionStorage.getItem('abm_hasil_id');
+var ringkasan;
+try { ringkasan = JSON.parse(sessionStorage.getItem('abm_hasil_ringkasan') || '{}'); }
+catch(e){ ringkasan = {}; }
+var jenis = sessionStorage.getItem('abm_sesi_jenis');
+var siswa;
+try { siswa = JSON.parse(sessionStorage.getItem('abm_siswa') || '{}'); } catch(e){ siswa = {}; }
+
+$('sub').textContent = (siswa.nama || '-') + ' | ' + (siswa.kelas || '-') + ' | ' + (siswa.sekolah || '-');
+
+function escapeHtml(s){
+  return String(s == null ? '' : s).replace(/[&<>]/g, function(c){
+    return { '&':'&amp;', '<':'&lt;', '>':'&gt;' }[c];
+  });
+}
+
+if (jenis === 'bakat' && ringkasan && ringkasan.iq_prediksi != null){
+  $('ringkasan').innerHTML =
+    '<h2>Ringkasan Hasil Tes Bakat</h2>' +
+    '<div class="alert info"><b>Prediksi IQ:</b> ' +
+    '<span style="font-size:1.4rem;color:var(--c-accent)">' + ringkasan.iq_prediksi + '</span> ' +
+    ' (' + ringkasan.kategori_iq + ')<br>' +
+    '<small>Hasil ini bersifat indikatif. Detail lengkap ada di laporan PDF (admin only).</small>' +
+    '</div>' +
+    '<div class="row">' +
+    '<div><b>Bakat Tinggi:</b> ' + (ringkasan.bakat_tinggi.length ? ringkasan.bakat_tinggi.join(', ') : 'Tidak ada') + '</div>' +
+    '<div><b>Bakat Perlu Dikembangkan:</b> ' + (ringkasan.bakat_rendah.length ? ringkasan.bakat_rendah.join(', ') : 'Tidak ada') + '</div>' +
+    '</div>';
+} else if (jenis === 'minat' && ringkasan){
+  var top3html = (ringkasan.top_3_bidang || []).map(function(b, i){
+    return '<li><b>#' + (i+1) + ' ' + escapeHtml(b.nama) + '</b> (skor: ' + b.skor + ')</li>';
+  }).join('');
+  var rekomHtml = (ringkasan.rekomendasi || []).map(function(r){
+    return '<li><b>' + escapeHtml(r.bidang) + ':</b> ' + escapeHtml(r.rekomendasi_pekerjaan) +
+           ' &rarr; <i>' + escapeHtml(r.rekomendasi_keahlian) + '</i></li>';
+  }).join('');
+  $('ringkasan').innerHTML =
+    '<h2>Ringkasan Hasil Tes Minat</h2>' +
+    '<h3>3 Bidang Minat Dominan</h3><ul>' + top3html + '</ul>' +
+    '<h3>Rekomendasi Program Keahlian</h3><ul>' + rekomHtml + '</ul>';
+} else {
+  $('ringkasan').innerHTML = '<div class="alert warn">Hasil tidak tersedia. Silakan menemui guru BK Anda.</div>';
+}
+
+// Bersihkan token agar tidak terpakai ulang
+sessionStorage.removeItem('abm_token');
+sessionStorage.removeItem('abm_token_exp');
+</script>
+</body>
+</html>
