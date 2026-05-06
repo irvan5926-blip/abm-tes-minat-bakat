@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ABM - Tes Minat &amp; Bakat</title>
+  <meta name="description" content="Asesmen Bakat & Minat (ABM) berbasis web - Pusmendik 2024 framework">
+  <link rel="stylesheet" href="assets/css/styles.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%2280%22 font-size=%2280%22>🌱</text></svg>">
+</head>
+<body>
+
+  <header class="app-header">
+    <div class="logo">
+      <div class="logo-icon">A</div>
+      <h1>ABM Tes Minat &amp; Bakat</h1>
+    </div>
+    <nav id="app-nav"></nav>
+  </header>
+
+  <main>
+    <section class="view active" id="view-login"></section>
+    <section class="view" id="view-menu"></section>
+    <section class="view" id="view-test"></section>
+    <section class="view" id="view-result"></section>
+    <section class="view" id="view-admin"></section>
+    <section class="view" id="view-panduan"></section>
+  </main>
+
+  <!-- External libs -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.0/dist/jspdf.plugin.autotable.min.js"></script>
+
+  <!-- App modules -->
+  <script src="assets/js/config.js"></script>
+  <script src="assets/js/utils.js"></script>
+  <script src="assets/js/supabase-client.js"></script>
+  <script src="assets/js/soal-bakat.js"></script>
+  <script src="assets/js/soal-minat.js"></script>
+  <script src="assets/js/skoring.js"></script>
+  <script src="assets/js/auth.js"></script>
+  <script src="assets/js/pdf-report.js"></script>
+  <script src="assets/js/views.js"></script>
+  <script src="assets/js/app.js"></script>
+</body>
+</html>

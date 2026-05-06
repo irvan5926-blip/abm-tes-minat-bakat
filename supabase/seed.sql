@@ -1,0 +1,14 @@
+-- Seed admin pertama.
+-- 
+-- Cara pakai: setelah Pak Muhammad sign up di aplikasi (atau lewat
+-- Supabase Dashboard -> Authentication -> Add User), TIDAK perlu run apa-apa
+-- karena trigger handle_new_user() akan otomatis bikin admin_profile.
+--
+-- Contoh menambah admin manual via SQL editor (kalau perlu):
+--   1. Auth -> Users -> "Add user" -> email & password -> Create.
+--   2. Trigger otomatis bikin entry di public.admin_profile.
+--   3. Untuk update nama:
+--        update public.admin_profile set nama = 'Pak Muhammad' where user_id = '<user_uuid>';
+--
+-- Tidak ada seed data wajib lainnya.
+select 'Schema siap. Tambahkan admin lewat halaman Login app (mode Daftar) atau Supabase Auth Dashboard.' as info;
