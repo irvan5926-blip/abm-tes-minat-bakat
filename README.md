@@ -91,9 +91,12 @@ git push
 ### 5. Aktifkan GitHub Pages
 
 1. Buka repo di GitHub → **Settings** → **Pages**
-2. Source: **GitHub Actions**
-3. Tunggu workflow `Deploy to GitHub Pages` selesai (~30 detik)
-4. URL aplikasi: `https://<username>.github.io/abm-tes-minat-bakat/`
+2. **Source**: pilih **"Deploy from a branch"**
+3. **Branch**: pilih **`main`** → folder **`/ (root)`** → klik **Save**
+4. Tunggu ~1 menit, GitHub akan generate URL aplikasi
+5. URL aplikasi: `https://<username>.github.io/abm-tes-minat-bakat/`
+
+> Setiap kali Anda push ke `main`, GitHub Pages otomatis mendeploy ulang.
 
 ### 6. Daftar Admin Pertama
 
