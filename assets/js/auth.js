@@ -204,11 +204,66 @@
     };
   }
 
+  // ---- Bank Soal Bakat (admin) ----
+  async function adminBankSoalList(filterSubtes) {
+    const sb = window.ABM.getClient();
+    if (!sb) return { ok: false, error: 'Supabase belum dikonfigurasi.' };
+    let q = sb.from('bank_soal_bakat').select('*')
+      .order('subtes').order('no').order('sub_index');
+    if (filterSubtes) q = q.eq('subtes', filterSubtes);
+    const { data, error } = await q;
+    if (error) return { ok: false, error: error.message };
+    return { ok: true, rows: data || [] };
+  }
+
+  async function adminBankSoalUpsert(payload) {
+    return window.ABM.rpc('api_admin_bank_soal_upsert', { p: payload });
+  }
+
+  async function adminBankSoalBulkUpsert(items) {
+    return window.ABM.rpc('api_admin_bank_soal_bulk_upsert', { p_items: items });
+  }
+
+  async function adminBankSoalDelete(id) {
+    return window.ABM.rpc('api_admin_bank_soal_delete', { p_id: id });
+  }
+
+  // Upload file gambar ke bucket bakat-pages.
+  // Return: { ok, path, error }
+  async function adminUploadBakatImage(file, suggestedName) {
+    const sb = window.ABM.getClient();
+    if (!sb) return { ok: false, error: 'Supabase belum dikonfigurasi.' };
+    if (!file) return { ok: false, error: 'File kosong.' };
+    const ext = (file.name.split('.').pop() || 'jpg').toLowerCase();
+    const safeBase = (suggestedName || file.name.replace(/\.[^.]+$/, ''))
+      .replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 60);
+    const uniq = (crypto.randomUUID && crypto.randomUUID()) ||
+                 (Date.now() + '-' + Math.floor(Math.random() * 1e9));
+    const path = `${safeBase}-${uniq}.${ext}`;
+    const { error } = await sb.storage.from('bakat-pages')
+      .upload(path, file, { cacheControl: '3600', upsert: false });
+    if (error) return { ok: false, error: error.message };
+    return { ok: true, path };
+  }
+
+  // Generate signed URL untuk preview di admin (5 menit).
+  async function adminSignBakatImage(path) {
+    const sb = window.ABM.getClient();
+    if (!sb) return { ok: false, error: 'Supabase belum dikonfigurasi.' };
+    if (!path) return { ok: false, error: 'Path kosong.' };
+    const { data, error } = await sb.storage.from('bakat-pages')
+      .createSignedUrl(path, 300);
+    if (error) return { ok: false, error: error.message };
+    return { ok: true, url: data && data.signedUrl };
+  }
+
   window.ABM = window.ABM || {};
   Object.assign(window.ABM, {
     adminLogin, adminSignUp, adminLogout, getCurrentUser, getAdminProfile,
     validateToken, startSession, saveMapping, submitAnswer, finishBakat, finishMinat,
     adminCreateToken, adminCreateTokensBulk, adminListTokens, adminCancelToken,
-    adminListHasil, adminGetHasilDetail, adminGetStats
+    adminListHasil, adminGetHasilDetail, adminGetStats,
+    adminBankSoalList, adminBankSoalUpsert, adminBankSoalBulkUpsert, adminBankSoalDelete,
+    adminUploadBakatImage, adminSignBakatImage
   });
 })();

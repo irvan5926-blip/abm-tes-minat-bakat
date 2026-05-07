@@ -40,6 +40,7 @@
   function setupGlobalDelegation() {
     document.addEventListener('click', onClick);
     document.addEventListener('change', onChange);
+    document.addEventListener('input', onInput);
     document.addEventListener('keydown', onKeydown);
   }
 
@@ -86,6 +87,21 @@
     }
   }
 
+  // Live update untuk text input (number answer_type)
+  let _numDebounce = null;
+  function onInput(e) {
+    if (e.target && e.target.id === 'i-soal') {
+      const T = S.test;
+      if (!T) return;
+      const s = T.soal[T.idx];
+      const val = String(e.target.value || '').trim();
+      T.answers[s.id] = val;
+      // Debounce push agar tidak spam server
+      if (_numDebounce) clearTimeout(_numDebounce);
+      _numDebounce = setTimeout(() => pushAnswer(s, val), 500);
+    }
+  }
+
   function onKeydown(e) {
     if (S.currentView !== 'test') return;
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
@@ -110,13 +126,32 @@
     let subtes = null;
     if (T.jenis === 'bakat') {
       const orig = A.BAKAT_SOAL.find(x => x.id === s.id);
-      benar = orig && String(orig.kunci).toLowerCase() === String(jawaban).toLowerCase();
+      benar = orig ? answerIsCorrect(orig, jawaban) : null;
       subtes = s.subtes;
     } else {
       subtes = T.subtesTag || 'BIDANG_1';
     }
+    if (!String(jawaban || '').trim()) return; // jangan push jawaban kosong
     const r = await A.submitAnswer(S.sesiId, s.id, String(jawaban), s.no_tampil, subtes, benar);
     if (!r.ok) console.warn('submit_answer failed', r.error);
+  }
+
+  // Compare jawaban siswa dgn kunci, mempertimbangkan answer_type.
+  function answerIsCorrect(soal, jawaban) {
+    const at = (soal.answer_type || 'letter5').toLowerCase();
+    const kunci = String(soal.kunci || '').toLowerCase().trim();
+    const j = String(jawaban || '').toLowerCase().trim();
+    if (!kunci) return null;
+    if (at === 'number') {
+      // Normalisasi koma → titik untuk angka desimal id-ID
+      const a = kunci.replace(',', '.').replace(/\s+/g, '');
+      const b = j.replace(',', '.').replace(/\s+/g, '');
+      if (a === b) return true;
+      const na = parseFloat(a), nb = parseFloat(b);
+      if (!isNaN(na) && !isNaN(nb)) return Math.abs(na - nb) < 1e-9;
+      return false;
+    }
+    return kunci === j;
   }
 
   // ---------- Actions ----------
@@ -229,6 +264,15 @@
         return;
       }
       A.toast('⏳ Memulai sesi tes...', 'info');
+      // Untuk bakat: load bank soal aktif dari DB dulu (bisa 30+ entries)
+      if (jenis === 'bakat') {
+        const lr = await A.loadBakatBank();
+        if (lr.source === 'demo') {
+          A.toast('⚠️ Bank Soal DB kosong — pakai demo bawaan.', 'info', 4000);
+        } else {
+          A.toast(`✓ Bank Soal: ${lr.count} soal aktif dari DB`, 'success', 2500);
+        }
+      }
       const r = await A.startSession(S.tokenStr, S.siswaInfo);
       if (!r.ok) { A.toast('Error: ' + r.error, 'error'); return; }
       S.sesiId = r.sesi_id;
@@ -240,12 +284,17 @@
       if (jenis === 'bakat') {
         mapping = buildBakatMapping(seed);
         soal = mappingToBakatSoal(mapping);
+        // Sign image URLs (1 round-trip untuk semua image_path)
+        let imageUrls = {};
+        try { imageUrls = await A.signBakatPages(soal); }
+        catch (e) { console.warn('signBakatPages failed', e); }
         S.test = {
           jenis: 'bakat',
           soal,
           idx: 0,
           answers: {},
           mapping,
+          imageUrls,
           expires_at: r.expires_at || S.token.expires_at
         };
       } else {
@@ -423,8 +472,199 @@
       const mapping = r.sesi && r.sesi.mapping;
       A.downloadFromHasil(r.hasil, r.siswa, mapping);
       A.toast('PDF di-download!', 'success');
+    },
+
+    // ---- Bank Soal (admin) ----
+    bsAdd() {
+      const host = document.getElementById('bs-modal-host');
+      if (!host) return;
+      host.innerHTML = A.renderBankSoalEditor(null);
+    },
+    async bsEdit(t) {
+      const id = t.dataset.id;
+      const r = await A.adminBankSoalList(null);
+      if (!r.ok) { A.toast(r.error, 'error'); return; }
+      const row = (r.rows || []).find(x => x.id === id);
+      if (!row) { A.toast('Soal tidak ditemukan.', 'error'); return; }
+      const host = document.getElementById('bs-modal-host');
+      if (!host) return;
+      host.innerHTML = A.renderBankSoalEditor(row);
+    },
+    bsCancel() {
+      const host = document.getElementById('bs-modal-host');
+      if (host) host.innerHTML = '';
+    },
+    async bsSave() {
+      const id = document.getElementById('bs-id').value || null;
+      const subtes = document.getElementById('bs-subtes').value;
+      const no = parseInt(document.getElementById('bs-no').value, 10);
+      const sub_index = parseInt(document.getElementById('bs-subindex').value, 10) || 0;
+      const answer_type = document.getElementById('bs-at').value;
+      const kunci = (document.getElementById('bs-kunci').value || '').trim().toLowerCase();
+      const active = document.getElementById('bs-active').value === 'true';
+      const durasi_menit = parseInt(document.getElementById('bs-durasi').value, 10) || null;
+      const label = (document.getElementById('bs-label').value || '').trim();
+      const image_path = (document.getElementById('bs-imgpath').value || '').trim();
+      if (!subtes || !no) {
+        A.setMsg('bs-msg', 'error', 'Subtes & No wajib diisi.');
+        return;
+      }
+      if (!kunci) {
+        A.setMsg('bs-msg', 'error', 'Kunci jawaban wajib.');
+        return;
+      }
+      A.setMsg('bs-msg', 'info', '⏳ Menyimpan...');
+      const r = await A.adminBankSoalUpsert({
+        id, subtes, no, sub_index, image_path, answer_type, kunci,
+        label, active, durasi_menit
+      });
+      if (!r.ok) { A.setMsg('bs-msg', 'error', A.escapeHtml(r.error || 'Gagal simpan.')); return; }
+      A.toast('Soal tersimpan.', 'success');
+      actions.bsCancel();
+      A.renderAdminContent();
+    },
+    async bsDelete(t) {
+      const id = t.dataset.id;
+      if (!confirm('Hapus soal ini? Tidak bisa dibatalkan.')) return;
+      const r = await A.adminBankSoalDelete(id);
+      if (!r.ok) { A.toast(r.error, 'error'); return; }
+      A.toast('Soal dihapus.', 'success');
+      A.renderAdminContent();
+    },
+    async bsPreview(t) {
+      const path = t.dataset.path;
+      const r = await A.adminSignBakatImage(path);
+      if (!r.ok) { A.toast(r.error, 'error'); return; }
+      const w = window.open('', '_blank', 'noopener,noreferrer');
+      if (w) {
+        w.document.write(`<title>Preview ${A.escapeHtml(path)}</title>
+          <body style="margin:0;background:#000;display:flex;align-items:center;justify-content:center;min-height:100vh;">
+          <img src="${A.escapeHtml(r.url)}" style="max-width:100%;max-height:100vh;">`);
+        w.document.close();
+      } else {
+        window.location.href = r.url;
+      }
+    },
+    bsPickImg() {
+      const f = document.getElementById('bs-imgfile');
+      if (!f) return;
+      f.onchange = async (e) => {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+        const subtes = document.getElementById('bs-subtes').value || 'BS';
+        const no = document.getElementById('bs-no').value || 'X';
+        const subIdx = parseInt(document.getElementById('bs-subindex').value, 10) || 0;
+        const suggested = subtes + '-' + String(no).padStart(3,'0') + (subIdx ? '-' + subIdx : '');
+        const msg = document.getElementById('bs-imgmsg');
+        if (msg) msg.textContent = '⏳ Upload ' + (file.size/1024).toFixed(0) + ' KB...';
+        const r = await A.adminUploadBakatImage(file, suggested);
+        if (!r.ok) {
+          if (msg) msg.textContent = '❌ ' + r.error;
+          return;
+        }
+        document.getElementById('bs-imgpath').value = r.path;
+        if (msg) msg.textContent = '✓ Tersimpan: ' + r.path;
+      };
+      f.click();
+    },
+    bsImportCsv() {
+      const host = document.getElementById('bs-modal-host');
+      if (!host) return;
+      host.innerHTML = A.renderBankSoalImportModal();
+    },
+    bsImportCancel() { actions.bsCancel(); },
+    async bsImportRun() {
+      const txt = (document.getElementById('bs-import-text').value || '').trim();
+      if (!txt) {
+        A.setMsg('bs-import-msg', 'error', 'Tempel CSV dulu.');
+        return;
+      }
+      let items;
+      try { items = parseCsvToBankSoal(txt); }
+      catch (e) {
+        A.setMsg('bs-import-msg', 'error', A.escapeHtml(e.message || 'Format CSV tidak valid.'));
+        return;
+      }
+      if (!items.length) {
+        A.setMsg('bs-import-msg', 'error', 'Tidak ada baris valid.');
+        return;
+      }
+      A.setMsg('bs-import-msg', 'info', `⏳ Import ${items.length} entry...`);
+      const r = await A.adminBankSoalBulkUpsert(items);
+      if (!r.ok) { A.setMsg('bs-import-msg', 'error', A.escapeHtml(r.error || 'Gagal import.')); return; }
+      A.toast(`✓ ${r.count || items.length} soal di-upsert.`, 'success');
+      actions.bsCancel();
+      A.renderAdminContent();
+    },
+    async bsExportCsv() {
+      const r = await A.adminBankSoalList(null);
+      if (!r.ok) { A.toast(r.error, 'error'); return; }
+      const csv = bankSoalToCsv(r.rows || []);
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'bank-soal-bakat-' + Date.now() + '.csv';
+      a.click();
+      A.toast('CSV di-download!', 'success');
     }
   };
+
+  // ---- CSV helpers untuk bank soal ----
+  function parseCsvToBankSoal(text) {
+    const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+    if (lines.length < 2) throw new Error('CSV harus minimal 2 baris (header + data).');
+    const header = splitCsvLine(lines[0]).map(h => h.toLowerCase());
+    const required = ['subtes','no','answer_type','kunci'];
+    required.forEach(c => { if (header.indexOf(c) < 0) throw new Error('Header wajib: ' + c); });
+    const items = [];
+    for (let i = 1; i < lines.length; i++) {
+      const cols = splitCsvLine(lines[i]);
+      const row = {};
+      header.forEach((h, j) => { row[h] = (cols[j] || '').trim(); });
+      if (!row.subtes || !row.no) continue;
+      items.push({
+        subtes: row.subtes.toUpperCase(),
+        no: parseInt(row.no, 10),
+        sub_index: parseInt(row.sub_index || '0', 10),
+        image_path: row.image_path || '',
+        answer_type: (row.answer_type || 'letter5').toLowerCase(),
+        kunci: (row.kunci || '').toLowerCase(),
+        label: row.label || '',
+        active: !(row.active && row.active.toLowerCase() === 'false')
+      });
+    }
+    return items;
+  }
+
+  function splitCsvLine(line) {
+    const out = [];
+    let cur = '', q = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (q) {
+        if (c === '"' && line[i+1] === '"') { cur += '"'; i++; }
+        else if (c === '"') { q = false; }
+        else cur += c;
+      } else {
+        if (c === '"') q = true;
+        else if (c === ',') { out.push(cur); cur = ''; }
+        else cur += c;
+      }
+    }
+    out.push(cur);
+    return out;
+  }
+
+  function bankSoalToCsv(rows) {
+    const head = ['subtes','no','sub_index','image_path','answer_type','kunci','label','active'];
+    const esc = v => {
+      const s = String(v == null ? '' : v);
+      return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    };
+    return [head.join(',')].concat(
+      rows.map(r => head.map(h => esc(r[h])).join(','))
+    ).join('\n');
+  }
 
   // ---------- Helpers (bulk export & render) ----------
   function bulkToCsv(data) {
@@ -484,12 +724,21 @@
     const bank = Object.fromEntries(A.BAKAT_SOAL.map(s => [s.id, s]));
     return mapping.urutan.map(u => {
       const s = bank[u.id_asli];
+      if (!s) return null;
       return {
-        id: s.id, no_tampil: u.no_tampil,
-        no_asli: parseInt(s.id.replace(/^[A-Z]+/, ''), 10),
-        subtes: s.subtes, pertanyaan: s.pertanyaan, opsi: s.opsi
+        id: s.id,
+        no_tampil: u.no_tampil,
+        no_asli: s.no_asli || parseInt(String(s.id).replace(/^[A-Z]+/, '').split('_')[0], 10) || 0,
+        sub_index: s.sub_index || 0,
+        subtes: s.subtes,
+        pertanyaan: s.pertanyaan || s.label || '',
+        label: s.label || '',
+        image_path: s.image_path || '',
+        answer_type: s.answer_type || 'letter5',
+        kunci: s.kunci || '',
+        opsi: s.opsi || A.defaultOpsiFor(s.answer_type || 'letter5')
       };
-    });
+    }).filter(x => x);
   }
 
   function buildMinatBidang1Mapping(seed) {
@@ -537,8 +786,8 @@
       const j = T.answers[s.id];
       if (!j) return;
       const orig = A.BAKAT_SOAL.find(x => x.id === s.id);
-      const benar = orig && String(orig.kunci).toLowerCase() === String(j).toLowerCase();
-      jawabanList.push({ soal_id: s.id, jawaban: j, benar, subtes: s.subtes });
+      const benar = orig ? answerIsCorrect(orig, j) : null;
+      jawabanList.push({ soal_id: s.id, jawaban: String(j), benar: !!benar, subtes: s.subtes });
     });
     const result = A.scoreBakat(jawabanList, T.mapping);
     const r = await A.finishBakat(S.sesiId, result.skor, result.klasifikasi, result.iq_prediksi, result.rekomendasi);

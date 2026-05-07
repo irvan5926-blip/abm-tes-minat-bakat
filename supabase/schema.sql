@@ -25,7 +25,12 @@ drop function if exists public.api_finish_bakat(uuid, jsonb, jsonb, integer, jso
 drop function if exists public.api_finish_minat(uuid, jsonb, jsonb, jsonb) cascade;
 drop function if exists public.api_next_program(uuid, text) cascade;
 drop function if exists public.api_expire_old_tokens() cascade;
+drop function if exists public.api_get_bank_soal_active(text) cascade;
+drop function if exists public.api_admin_bank_soal_upsert(jsonb) cascade;
+drop function if exists public.api_admin_bank_soal_delete(uuid) cascade;
+drop function if exists public.api_admin_bank_soal_bulk_upsert(jsonb) cascade;
 
+drop table if exists public.bank_soal_bakat cascade;
 drop table if exists public.audit_log cascade;
 drop table if exists public.hasil cascade;
 drop table if exists public.jawaban cascade;
@@ -130,17 +135,49 @@ create table public.audit_log (
 );
 create index idx_audit_created on public.audit_log(created_at desc);
 
+-- Bank Soal Bakat (admin-managed). Konten disuplai admin sekolah.
+-- image_path = path di Supabase Storage bucket "bakat-pages" (relatif).
+-- answer_type:
+--   letter4  = pilih a-d
+--   letter5  = pilih a-e
+--   letter6  = pilih a-f
+--   number   = input angka (exact match)
+--   sb       = pilih S (Sama) / B (Berbeda)
+-- sub_index: untuk soal multi-jawaban (mis. 1 soal punya jawaban I, II, III)
+--   diisi 0 untuk soal tunggal; >=1 untuk sub-jawaban.
+-- kunci: jawaban benar (huruf, angka, atau S/B).
+create table public.bank_soal_bakat (
+  id uuid primary key default gen_random_uuid(),
+  subtes text not null check (subtes in ('PV','PN','AV','PU','PS','TD','SI','KK','FA')),
+  no int not null,
+  sub_index int not null default 0,
+  image_path text default '',
+  answer_type text not null default 'letter5'
+    check (answer_type in ('letter4','letter5','letter6','number','sb')),
+  kunci text not null default '',
+  label text default '',
+  durasi_menit int default null,
+  active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  created_by uuid references auth.users(id),
+  unique (subtes, no, sub_index)
+);
+create index idx_bank_subtes on public.bank_soal_bakat(subtes, no, sub_index);
+create index idx_bank_active on public.bank_soal_bakat(active);
+
 -- =================================================================
 -- ROW LEVEL SECURITY
 -- =================================================================
 
-alter table public.admin_profile enable row level security;
-alter table public.siswa         enable row level security;
-alter table public.tokens        enable row level security;
-alter table public.sesi          enable row level security;
-alter table public.jawaban       enable row level security;
-alter table public.hasil         enable row level security;
-alter table public.audit_log     enable row level security;
+alter table public.admin_profile  enable row level security;
+alter table public.siswa          enable row level security;
+alter table public.tokens         enable row level security;
+alter table public.sesi           enable row level security;
+alter table public.jawaban        enable row level security;
+alter table public.hasil          enable row level security;
+alter table public.audit_log      enable row level security;
+alter table public.bank_soal_bakat enable row level security;
 
 -- Authenticated (admin) bisa baca/tulis semua
 create policy "admin all admin_profile" on public.admin_profile for all to authenticated using (true) with check (true);
@@ -150,6 +187,7 @@ create policy "admin all sesi"          on public.sesi          for all to authe
 create policy "admin all jawaban"       on public.jawaban       for all to authenticated using (true) with check (true);
 create policy "admin all hasil"         on public.hasil         for all to authenticated using (true) with check (true);
 create policy "admin all audit"         on public.audit_log     for all to authenticated using (true) with check (true);
+create policy "admin all bank_soal"     on public.bank_soal_bakat for all to authenticated using (true) with check (true);
 
 -- Anon (siswa) TIDAK punya akses langsung ke table.
 -- Mereka hanya bisa lewat RPC `api_*` di bawah (security definer).
@@ -444,6 +482,147 @@ as $$
   select count(*)::int from upd;
 $$;
 
+-- =================================================================
+-- BANK SOAL BAKAT - admin upsert/delete + anon read (active only)
+-- =================================================================
+
+-- Anon (siswa) ambil bank soal aktif untuk subtes tertentu.
+-- Dipanggil saat siswa mulai tes. Hanya kembalikan kunci untuk skoring sisi
+-- client (frontend perlu tahu jawaban benar untuk hitung benar/salah). Akses
+-- dilindungi oleh fakta siswa hanya panggil ini setelah punya sesi aktif
+-- (token sudah TERPAKAI, tidak bisa di-replay).
+create or replace function public.api_get_bank_soal_active(p_subtes text default null)
+returns setof public.bank_soal_bakat
+language sql
+security definer
+set search_path = public
+as $$
+  select * from public.bank_soal_bakat
+  where active = true
+    and (p_subtes is null or subtes = p_subtes)
+  order by subtes, no, sub_index;
+$$;
+
+-- Admin upsert satu soal. Field: id (opsional, kalau update), subtes, no, sub_index,
+-- image_path, answer_type, kunci, label, durasi_menit, active.
+create or replace function public.api_admin_bank_soal_upsert(p jsonb)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_id uuid := nullif(p->>'id','')::uuid;
+  v_admin uuid := auth.uid();
+begin
+  if v_admin is null then
+    return jsonb_build_object('ok', false, 'error', 'Hanya admin yang bisa upsert bank soal.');
+  end if;
+  if v_id is null then
+    insert into public.bank_soal_bakat(
+      subtes, no, sub_index, image_path, answer_type, kunci, label, durasi_menit, active, created_by
+    ) values (
+      p->>'subtes',
+      coalesce((p->>'no')::int, 0),
+      coalesce((p->>'sub_index')::int, 0),
+      coalesce(p->>'image_path',''),
+      coalesce(p->>'answer_type','letter5'),
+      coalesce(p->>'kunci',''),
+      coalesce(p->>'label',''),
+      nullif(p->>'durasi_menit','')::int,
+      coalesce((p->>'active')::boolean, true),
+      v_admin
+    ) returning id into v_id;
+  else
+    update public.bank_soal_bakat set
+      subtes        = coalesce(p->>'subtes', subtes),
+      no            = coalesce((p->>'no')::int, no),
+      sub_index     = coalesce((p->>'sub_index')::int, sub_index),
+      image_path    = coalesce(p->>'image_path', image_path),
+      answer_type   = coalesce(p->>'answer_type', answer_type),
+      kunci         = coalesce(p->>'kunci', kunci),
+      label         = coalesce(p->>'label', label),
+      durasi_menit  = coalesce(nullif(p->>'durasi_menit','')::int, durasi_menit),
+      active        = coalesce((p->>'active')::boolean, active),
+      updated_at    = now()
+    where id = v_id;
+  end if;
+  insert into public.audit_log(actor, action, detail)
+  values (v_admin::text, 'BANK_SOAL_UPSERT', 'id=' || v_id::text);
+  return jsonb_build_object('ok', true, 'id', v_id);
+end;
+$$;
+
+-- Admin bulk upsert (untuk import CSV).
+-- p_items: jsonb array, tiap entry sama struktur dengan upsert tunggal.
+-- Replace by (subtes, no, sub_index) — entry baru insert, yang sudah ada update.
+create or replace function public.api_admin_bank_soal_bulk_upsert(p_items jsonb)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  it jsonb;
+  cnt int := 0;
+  v_admin uuid := auth.uid();
+begin
+  if v_admin is null then
+    return jsonb_build_object('ok', false, 'error', 'Hanya admin yang bisa bulk upsert.');
+  end if;
+  if jsonb_typeof(p_items) <> 'array' then
+    return jsonb_build_object('ok', false, 'error', 'p_items harus array.');
+  end if;
+  for it in select * from jsonb_array_elements(p_items) loop
+    insert into public.bank_soal_bakat(
+      subtes, no, sub_index, image_path, answer_type, kunci, label, durasi_menit, active, created_by
+    ) values (
+      it->>'subtes',
+      coalesce((it->>'no')::int, 0),
+      coalesce((it->>'sub_index')::int, 0),
+      coalesce(it->>'image_path',''),
+      coalesce(it->>'answer_type','letter5'),
+      coalesce(it->>'kunci',''),
+      coalesce(it->>'label',''),
+      nullif(it->>'durasi_menit','')::int,
+      coalesce((it->>'active')::boolean, true),
+      v_admin
+    )
+    on conflict (subtes, no, sub_index) do update set
+      image_path   = excluded.image_path,
+      answer_type  = excluded.answer_type,
+      kunci        = excluded.kunci,
+      label        = excluded.label,
+      durasi_menit = excluded.durasi_menit,
+      active       = excluded.active,
+      updated_at   = now();
+    cnt := cnt + 1;
+  end loop;
+  insert into public.audit_log(actor, action, detail)
+  values (v_admin::text, 'BANK_SOAL_BULK_UPSERT', 'count=' || cnt::text);
+  return jsonb_build_object('ok', true, 'count', cnt);
+end;
+$$;
+
+create or replace function public.api_admin_bank_soal_delete(p_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_admin uuid := auth.uid();
+begin
+  if v_admin is null then
+    return jsonb_build_object('ok', false, 'error', 'Hanya admin.');
+  end if;
+  delete from public.bank_soal_bakat where id = p_id;
+  insert into public.audit_log(actor, action, detail)
+  values (v_admin::text, 'BANK_SOAL_DELETE', 'id=' || p_id::text);
+  return jsonb_build_object('ok', true);
+end;
+$$;
+
 -- Grant execute pada semua RPC `api_*` ke role anon (siswa) & authenticated (admin)
 grant execute on function public.api_validate_token(text) to anon, authenticated;
 grant execute on function public.api_start_session(text, text, text, text, text, date, text) to anon, authenticated;
@@ -453,6 +632,10 @@ grant execute on function public.api_submit_answer(uuid, text, text, int, text, 
 grant execute on function public.api_finish_bakat(uuid, jsonb, jsonb, int, jsonb) to anon, authenticated;
 grant execute on function public.api_finish_minat(uuid, jsonb, jsonb, jsonb) to anon, authenticated;
 grant execute on function public.api_expire_old_tokens() to anon, authenticated;
+grant execute on function public.api_get_bank_soal_active(text) to anon, authenticated;
+grant execute on function public.api_admin_bank_soal_upsert(jsonb) to authenticated;
+grant execute on function public.api_admin_bank_soal_bulk_upsert(jsonb) to authenticated;
+grant execute on function public.api_admin_bank_soal_delete(uuid) to authenticated;
 
 -- =================================================================
 -- AUTO: Trigger untuk membuat admin_profile saat user baru di auth.users
@@ -482,3 +665,28 @@ create trigger on_auth_user_created
 -- Lalu jalankan SELECT di bawah ini SEKALI (uncomment).
 -- =================================================================
 -- select cron.schedule('expire-tokens', '* * * * *', $$select public.api_expire_old_tokens();$$);
+
+-- =================================================================
+-- STORAGE: bucket "bakat-pages". Run sekali setelah schema.
+-- =================================================================
+-- Bucket private. Akses anon via signed URL berdurasi pendek
+-- (frontend createSignedUrl). Path file pakai UUID (sulit ditebak).
+insert into storage.buckets(id, name, public)
+values ('bakat-pages', 'bakat-pages', false)
+on conflict (id) do nothing;
+
+drop policy if exists "bakat-pages admin write"  on storage.objects;
+drop policy if exists "bakat-pages admin read"   on storage.objects;
+drop policy if exists "bakat-pages anon read"    on storage.objects;
+
+-- Admin (authenticated) full akses ke bucket bakat-pages:
+create policy "bakat-pages admin write"
+on storage.objects for all to authenticated
+using (bucket_id = 'bakat-pages')
+with check (bucket_id = 'bakat-pages');
+
+-- Anon (siswa) read-only akses ke bucket bakat-pages:
+-- diperlukan agar frontend (anon key) bisa createSignedUrl saat tes.
+create policy "bakat-pages anon read"
+on storage.objects for select to anon
+using (bucket_id = 'bakat-pages');

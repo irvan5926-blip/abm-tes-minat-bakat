@@ -216,20 +216,58 @@
 
     let bodyHtml = '';
     if (T.jenis === 'bakat') {
-      const opsi = s.opsi || {};
       const sel = T.answers[s.id] || '';
+      const at = s.answer_type || 'letter5';
+      const imgUrl = (T.imageUrls && s.image_path) ? T.imageUrls[s.image_path] : null;
+      const imgHtml = imgUrl ? `
+        <div class="soal-image">
+          <img src="${A.escapeHtml(imgUrl)}" alt="Soal ${A.escapeHtml(s.subtes)} ${s.no_asli || ''}" loading="lazy">
+        </div>` : '';
+      const labelTxt = s.label && s.label.trim()
+        ? s.label.trim()
+        : `Subtes ${A.escapeHtml(s.subtes)} — Soal No. ${s.no_asli || cur + 1}` +
+          (s.sub_index ? ` (jawaban ${s.sub_index})` : '');
+      // Render input control sesuai answer_type
+      let inputHtml;
+      if (at === 'number') {
+        inputHtml = `
+          <div class="opsi-list">
+            <input type="text" inputmode="decimal" class="input-num"
+              id="i-soal" placeholder="Ketik angka jawaban"
+              value="${A.escapeHtml(sel)}"
+              autocomplete="off"
+              style="font-size:18px; padding:10px 12px; text-align:center; letter-spacing:2px;">
+          </div>`;
+      } else if (at === 'sb') {
+        const opts = [{k:'s',l:'S — Sama'},{k:'b',l:'B — Berbeda'}];
+        inputHtml = `
+          <div class="opsi-list opsi-grid-2">
+            ${opts.map(o => `
+              <label class="opsi ${sel === o.k ? 'selected' : ''}">
+                <input type="radio" name="opsi" value="${o.k}" ${sel === o.k ? 'checked' : ''}>
+                <span class="label">${o.k.toUpperCase()}</span>
+                <span class="text">${o.l}</span>
+              </label>`).join('')}
+          </div>`;
+      } else {
+        // letter4 / letter5 / letter6
+        const cnt = at === 'letter4' ? 4 : (at === 'letter6' ? 6 : 5);
+        const letters = ['a','b','c','d','e','f'].slice(0, cnt);
+        inputHtml = `
+          <div class="opsi-list opsi-letter">
+            ${letters.map(k => `
+              <label class="opsi ${sel === k ? 'selected' : ''}">
+                <input type="radio" name="opsi" value="${k}" ${sel === k ? 'checked' : ''}>
+                <span class="label">${k.toUpperCase()}</span>
+              </label>`).join('')}
+          </div>`;
+      }
       bodyHtml = `
         <div class="soal-box">
           <div><span class="soal-no">${cur + 1}</span><b>Soal ${cur + 1} dari ${total}</b> <span class="badge muted">${A.escapeHtml(s.subtes)}</span></div>
-          <div class="soal-text">${A.escapeHtml(s.pertanyaan)}</div>
-          <div class="opsi-list">
-            ${['a','b','c','d','e'].filter(k => opsi[k] !== undefined).map(k => `
-              <label class="opsi ${sel === k ? 'selected' : ''}">
-                <input type="radio" name="opsi" value="${k}" ${sel === k ? 'checked' : ''}>
-                <span class="label">${k.toUpperCase()}.</span>
-                <span class="text">${A.escapeHtml(opsi[k])}</span>
-              </label>`).join('')}
-          </div>
+          <div class="soal-text">${A.escapeHtml(labelTxt)}</div>
+          ${imgHtml}
+          ${inputHtml}
         </div>`;
     } else {
       // Minat: pasangan A vs B
@@ -464,31 +502,167 @@
       </table></div>`;
     }
     else if (tab === 'bank') {
-      const totBakat = A.BAKAT_SOAL.length;
-      const subRows = A.BAKAT_SUBTES.map(s => {
-        const c = A.BAKAT_SOAL.filter(q => q.subtes === s.kode).length;
-        return `<tr><td>${s.kode}</td><td>${A.escapeHtml(s.nama)}</td><td>${A.escapeHtml(s.dimensi)}</td><td>${c}</td></tr>`;
-      }).join('');
-      cont.innerHTML = `
-        <div class="alert info">
-          Bank soal di-bundle di file <code>assets/js/soal-bakat.js</code> dan <code>assets/js/soal-minat.js</code>.
-          Untuk menambah/mengganti soal: edit file tersebut → commit ke GitHub → halaman ini auto re-deploy.
-        </div>
-        <h3>Soal Bakat</h3>
-        <p>Total: <b>${totBakat}</b> soal aktif.</p>
-        <div class="table-wrap"><table class="data">
-          <thead><tr><th>Kode</th><th>Subtes</th><th>Dimensi</th><th>Jumlah</th></tr></thead>
-          <tbody>${subRows}</tbody>
-        </table></div>
-        <h3 style="margin-top:18px;">Soal Minat</h3>
-        <p>Tahap 1 (Bidang): <b>28</b> pasangan dari 8 bidang.<br>
-        Tahap 2 (Program): per bidang dominan, <b>28</b> pasangan dari 8 sub-bidang.<br>
-        Total per siswa: ~28 + 3×28 = 112 pasangan.</p>
-        <div class="table-wrap"><table class="data">
-          <thead><tr><th>Kode</th><th>Bidang</th></tr></thead>
-          <tbody>${A.MINAT_BIDANG.map(b => `<tr><td>${b.kode}</td><td>${A.escapeHtml(b.nama)}</td></tr>`).join('')}</tbody>
-        </table></div>`;
+      await renderBankSoalTab(cont);
     }
+  }
+
+  // ---------- BANK SOAL TAB (admin CRUD) ----------
+  async function renderBankSoalTab(cont) {
+    const r = await A.adminBankSoalList(S.bankFilter || null);
+    if (!r.ok) { cont.innerHTML = `<div class="alert error">${A.escapeHtml(r.error)}</div>`; return; }
+    const rows = r.rows;
+    const counts = {};
+    A.BAKAT_SUBTES.forEach(s => counts[s.kode] = 0);
+    rows.forEach(x => { if (counts[x.subtes] !== undefined) counts[x.subtes]++; });
+    const total = rows.length;
+    const subOpts = A.BAKAT_SUBTES.map(s =>
+      `<option value="${s.kode}" ${(S.bankFilter === s.kode) ? 'selected' : ''}>${s.kode} — ${A.escapeHtml(s.nama)} (${counts[s.kode]||0})</option>`
+    ).join('');
+    const tbody = rows.length ? rows.map(row => {
+      const subDef = A.BAKAT_SUBTES.find(s => s.kode === row.subtes);
+      return `<tr>
+        <td>${A.escapeHtml(row.subtes)}</td>
+        <td>${row.no}</td>
+        <td>${row.sub_index || 0}</td>
+        <td><code>${A.escapeHtml((row.image_path || '').slice(0, 32))}${(row.image_path||'').length > 32 ? '…' : ''}</code></td>
+        <td><span class="badge muted">${A.escapeHtml(row.answer_type)}</span></td>
+        <td><b style="font-family:monospace;">${A.escapeHtml(row.kunci || '-')}</b></td>
+        <td>${row.active ? '<span class="badge success">aktif</span>' : '<span class="badge muted">nonaktif</span>'}</td>
+        <td>
+          <button class="btn sm" data-act="bsEdit" data-id="${A.escapeHtml(row.id)}">✎ Edit</button>
+          ${row.image_path ? `<button class="btn sm secondary" data-act="bsPreview" data-path="${A.escapeHtml(row.image_path)}">👁 Lihat</button>` : ''}
+          <button class="btn sm danger" data-act="bsDelete" data-id="${A.escapeHtml(row.id)}">🗑</button>
+        </td>
+      </tr>`;
+    }).join('') : `<tr><td colspan="8" class="text-center muted">
+      ${S.bankFilter ? 'Belum ada soal untuk subtes ini.' : 'Bank soal masih kosong. Mulai dengan klik <b>+ Tambah Soal</b> atau <b>📥 Import CSV</b>.'}
+    </td></tr>`;
+
+    cont.innerHTML = `
+      <div class="alert info">
+        <b>Bank Soal Bakat (admin-managed)</b><br>
+        Konten soal disuplai oleh admin sekolah:
+        upload gambar halaman ke Supabase Storage (bucket <code>bakat-pages</code>),
+        lalu set kunci jawaban + tipe input per soal di sini. Saat siswa tes,
+        gambar dan kunci diambil dari sini.
+      </div>
+      <div class="flex wrap" style="gap:8px; margin-bottom:10px;">
+        <button class="btn" data-act="bsAdd">➕ Tambah Soal</button>
+        <button class="btn secondary" data-act="bsImportCsv">📥 Import CSV</button>
+        <button class="btn secondary" data-act="bsExportCsv">📤 Export CSV</button>
+        <div style="flex:1;"></div>
+        <select id="bs-filter">
+          <option value="">-- Semua Subtes (${total}) --</option>
+          ${subOpts}
+        </select>
+      </div>
+      <div class="table-wrap"><table class="data">
+        <thead><tr>
+          <th>Subtes</th><th>No</th><th>Sub</th><th>Image Path</th>
+          <th>Tipe</th><th>Kunci</th><th>Status</th><th>Aksi</th>
+        </tr></thead>
+        <tbody>${tbody}</tbody>
+      </table></div>
+      <div id="bs-modal-host"></div>`;
+
+    const filterSel = document.getElementById('bs-filter');
+    if (filterSel) filterSel.onchange = (ev) => {
+      S.bankFilter = ev.target.value || null;
+      renderBankSoalTab(cont);
+    };
+  }
+
+  function renderBankSoalEditor(row) {
+    const A = window.ABM;
+    const r = row || {};
+    const subOpts = A.BAKAT_SUBTES.map(s =>
+      `<option value="${s.kode}" ${r.subtes === s.kode ? 'selected' : ''}>${s.kode} — ${A.escapeHtml(s.nama)}</option>`
+    ).join('');
+    const atOpts = [
+      ['letter4','Pilihan a-d'],['letter5','Pilihan a-e'],['letter6','Pilihan a-f'],
+      ['number','Input angka'],['sb','Sama / Berbeda']
+    ].map(([k,l]) => `<option value="${k}" ${r.answer_type === k ? 'selected' : ''}>${l}</option>`).join('');
+    return `
+      <div class="modal-bg" id="modal-bs">
+        <div class="modal" style="max-width:720px;">
+          <h2>${r.id ? '✎ Edit Soal' : '➕ Tambah Soal'}</h2>
+          <div id="bs-msg"></div>
+          <input type="hidden" id="bs-id" value="${A.escapeHtml(r.id || '')}">
+          <div class="form-row">
+            <div class="form-group"><label>Subtes</label>
+              <select id="bs-subtes">${subOpts}</select>
+            </div>
+            <div class="form-group"><label>No Soal</label>
+              <input type="number" id="bs-no" value="${A.escapeHtml(r.no || '')}" min="1" max="999">
+            </div>
+            <div class="form-group"><label>Sub-index</label>
+              <input type="number" id="bs-subindex" value="${A.escapeHtml(r.sub_index || 0)}" min="0" max="9">
+            </div>
+            <div class="form-group"><label>Tipe Input</label>
+              <select id="bs-at">${atOpts}</select>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group" style="flex:2;"><label>Kunci Jawaban</label>
+              <input id="bs-kunci" value="${A.escapeHtml(r.kunci || '')}" placeholder="mis: b / 5 / s" maxlength="20">
+              <div class="muted" style="font-size:12px;">letter: a-f · number: angka · sb: s atau b</div>
+            </div>
+            <div class="form-group" style="flex:1;"><label>Aktif</label>
+              <select id="bs-active">
+                <option value="true" ${r.active !== false ? 'selected' : ''}>Ya</option>
+                <option value="false" ${r.active === false ? 'selected' : ''}>Tidak</option>
+              </select>
+            </div>
+            <div class="form-group" style="flex:1;"><label>Durasi (menit)</label>
+              <input type="number" id="bs-durasi" value="${A.escapeHtml(r.durasi_menit || '')}" min="1" max="60" placeholder="opsional">
+            </div>
+          </div>
+          <div class="form-group"><label>Label / Catatan (opsional)</label>
+            <input id="bs-label" value="${A.escapeHtml(r.label || '')}" placeholder="Mis: Lihat halaman 12 nomor 3" maxlength="200">
+          </div>
+          <div class="form-group">
+            <label>Gambar Halaman</label>
+            <div class="flex" style="gap:8px;">
+              <input type="text" id="bs-imgpath" value="${A.escapeHtml(r.image_path || '')}" placeholder="path otomatis terisi setelah upload" readonly style="flex:1;">
+              <input type="file" id="bs-imgfile" accept="image/*" style="display:none;">
+              <button class="btn secondary" data-act="bsPickImg">📤 Upload</button>
+              ${r.image_path ? `<button class="btn secondary" data-act="bsPreview" data-path="${A.escapeHtml(r.image_path)}">👁</button>` : ''}
+            </div>
+            <div id="bs-imgmsg" class="muted" style="font-size:12px; margin-top:4px;"></div>
+          </div>
+          <div class="flex" style="gap:8px; margin-top:16px;">
+            <button class="btn" data-act="bsSave">💾 Simpan</button>
+            <button class="btn secondary" data-act="bsCancel">Batal</button>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function renderBankSoalImportModal() {
+    return `
+      <div class="modal-bg" id="modal-bs-import">
+        <div class="modal" style="max-width:760px;">
+          <h2>📥 Import Bank Soal (CSV)</h2>
+          <p class="muted">Format kolom: <code>subtes,no,sub_index,image_path,answer_type,kunci,label,active</code></p>
+          <p class="muted" style="font-size:12px;">
+            <b>subtes</b> = PV/PN/AV/PU/PS/TD/SI/KK/FA · <b>no</b> = nomor soal (1..) · <b>sub_index</b> = 0 utk soal tunggal, 1+ utk multi-jawaban ·
+            <b>answer_type</b> = letter4/letter5/letter6/number/sb · <b>kunci</b> = jawaban benar ·
+            <b>image_path</b> = path di Storage (kosong jika tanpa gambar) · <b>active</b> = true/false
+          </p>
+          <div id="bs-import-msg"></div>
+          <div class="form-group">
+            <label>Tempel CSV (header wajib di baris 1)</label>
+            <textarea id="bs-import-text" rows="12" style="font-family:monospace; font-size:12px;" placeholder="subtes,no,sub_index,image_path,answer_type,kunci,label,active
+PV,1,0,,letter5,b,,true
+PV,2,0,,letter5,e,,true
+..."></textarea>
+          </div>
+          <div class="flex" style="gap:8px;">
+            <button class="btn" data-act="bsImportRun">📥 Import</button>
+            <button class="btn secondary" data-act="bsImportCancel">Batal</button>
+          </div>
+        </div>
+      </div>`;
   }
 
   // ---------- PANDUAN VIEW ----------
@@ -515,6 +689,13 @@
         <p>Asesmen Bakat &amp; Minat (ABM) mengukur 7 dimensi bakat (Spasial, Verbal, Penalaran, Klerikal, Mekanika, Kuantitatif, Bahasa) dan 18 area minat (Tracey 2002) yang dipetakan dari 8 bidang minat.</p>
         <h3>Pengacakan Soal</h3>
         <p>Setiap siswa mendapat urutan soal acak yang berbeda (dengan seed deterministik berbasis sesi+token). Mapping <i>no_asli → no_tampil</i> direkam untuk audit dan dicetak di laporan PDF admin.</p>
+        <h3>Bank Soal Bakat</h3>
+        <p>Konten soal Tes Bakat dikelola admin lewat tab <b>📚 Bank Soal</b>. Per soal:
+          gambar halaman (di Supabase Storage bucket <code>bakat-pages</code>), kunci jawaban,
+          dan tipe input (a-d / a-e / a-f / angka / Sama-Berbeda). Saat siswa mulai tes,
+          aplikasi tarik bank aktif lalu generate signed URL gambar untuk durasi sesi.
+          Bila bank di DB kosong, aplikasi pakai <i>demo bawaan</i> (set soal generik) untuk
+          menguji alur tes.</p>
         <h3>Skoring Bakat</h3>
         <ul>
           <li>Tiap soal benar = 1 poin. Skor subtes = (benar / total) × 100.</li>
@@ -571,5 +752,8 @@
   }
 
   window.ABM = window.ABM || {};
-  Object.assign(window.ABM, { show, rerender, renderSignupModal, renderAdminContent });
+  Object.assign(window.ABM, {
+    show, rerender, renderSignupModal, renderAdminContent,
+    renderBankSoalTab, renderBankSoalEditor, renderBankSoalImportModal
+  });
 })();
