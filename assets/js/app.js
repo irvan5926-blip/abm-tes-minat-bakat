@@ -123,7 +123,8 @@
   const actions = {
     goLogin() {
       // Reset state untuk siswa
-      S.token = null; S.tokenStr = null; S.test = null; S.result = null; S.sesiId = null;
+      S.token = null; S.tokenStr = null; S.siswaInfo = null;
+      S.test = null; S.result = null; S.sesiId = null;
       A.show('login'); A.rerender();
     },
     goPanduan() { A.show('panduan'); A.rerender(); },
@@ -145,6 +146,32 @@
       A.setMsg('login-siswa-msg', '', '');
       S.tokenStr = r.token;
       S.token = r;
+      // Pre-fill siswaInfo dari token (kalau admin sempat isi data, biasanya kosong)
+      S.siswaInfo = {
+        nama: r.siswa_nama || '',
+        nis: r.siswa_nis || '',
+        kelas: r.siswa_kelas || '',
+        sekolah: r.siswa_sekolah || ''
+      };
+      A.show('siswa-form');
+      A.rerender();
+    },
+
+    siswaFormSubmit() {
+      const nama = (document.getElementById('sf-nama').value || '').trim();
+      if (!nama) {
+        A.setMsg('sf-msg', 'error', 'Nama lengkap wajib diisi.');
+        return;
+      }
+      S.siswaInfo = {
+        nama,
+        nis: (document.getElementById('sf-nis').value || '').trim(),
+        kelas: (document.getElementById('sf-kelas').value || '').trim(),
+        sekolah: (document.getElementById('sf-sekolah').value || '').trim(),
+        tanggal_lahir: (document.getElementById('sf-tgl').value || '') || null,
+        jenis_kelamin: (document.getElementById('sf-jk').value || '') || null
+      };
+      A.toast('Identitas tersimpan. Klik kartu untuk mulai tes.', 'success');
       A.show('menu');
       A.rerender();
     },
@@ -196,8 +223,13 @@
     // ---- Mulai tes ----
     async startTes(t) {
       const jenis = t.dataset.jenis;
+      if (!S.siswaInfo || !S.siswaInfo.nama) {
+        A.toast('Silakan isi identitas terlebih dahulu.', 'error');
+        A.show('siswa-form'); A.rerender();
+        return;
+      }
       A.toast('⏳ Memulai sesi tes...', 'info');
-      const r = await A.startSession(S.tokenStr);
+      const r = await A.startSession(S.tokenStr, S.siswaInfo);
       if (!r.ok) { A.toast('Error: ' + r.error, 'error'); return; }
       S.sesiId = r.sesi_id;
 
@@ -267,32 +299,120 @@
     },
 
     async buatToken() {
-      const payload = {
-        jenis_tes: document.getElementById('tk-jenis').value,
-        siswa_nama: document.getElementById('tk-nama').value.trim(),
-        siswa_nis: document.getElementById('tk-nis').value.trim(),
-        siswa_kelas: document.getElementById('tk-kelas').value.trim(),
-        siswa_sekolah: document.getElementById('tk-sekolah').value.trim()
-      };
+      const jenis = document.getElementById('tk-jenis').value;
+      const expMin = parseInt(document.getElementById('tk-exp').value, 10) || 5;
       A.setMsg('tk-msg', 'info', '⏳ Generate token...');
-      const r = await A.adminCreateToken(payload);
+      const r = await A.adminCreateToken({ jenis_tes: jenis, exp_minutes: expMin });
       if (!r.ok) { A.setMsg('tk-msg', 'error', A.escapeHtml(r.error)); return; }
       A.setMsg('tk-msg', '', '');
       const url = window.location.origin + window.location.pathname + '?token=' + r.token;
       document.getElementById('tk-result').innerHTML = `
         <div class="token-box">
-          <div class="muted">Token Berhasil Dibuat (berlaku 5 menit)</div>
+          <div class="muted">Token Berhasil Dibuat (berlaku ${expMin} menit) — ${A.escapeHtml(jenis.toUpperCase())}</div>
           <div class="token-text">${r.token}</div>
           <button class="btn secondary" data-act="copyToken" data-token="${r.token}">📋 Salin Token</button>
           <button class="btn secondary" data-act="copyUrl" data-url="${A.escapeHtml(url)}">🔗 Salin URL Siswa</button>
         </div>
-        <p class="muted text-center">URL siswa: <code>${A.escapeHtml(url)}</code></p>`;
+        <p class="muted text-center">URL siswa: <code>${A.escapeHtml(url)}</code></p>
+        <p class="muted text-center" style="font-size:12px;">Siswa akan diminta isi nama &amp; identitas saat login.</p>`;
       A.toast('Token dibuat: ' + r.token, 'success');
     },
 
     async copyUrl(t) {
       try { await navigator.clipboard.writeText(t.dataset.url); A.toast('URL disalin!', 'success'); }
       catch (e) { A.toast('Gagal menyalin: ' + e.message, 'error'); }
+    },
+
+    async bulkGenerate() {
+      const jenis  = document.getElementById('bm-jenis').value;
+      const jumlah = parseInt(document.getElementById('bm-jumlah').value, 10) || 0;
+      const expMin = parseInt(document.getElementById('bm-exp').value, 10)    || 5;
+      if (jumlah < 1 || jumlah > 500) {
+        A.setMsg('bm-msg', 'error', 'Jumlah token harus 1-500.');
+        return;
+      }
+      A.setMsg('bm-msg', 'info', `⏳ Generating ${jumlah} token...`);
+      const r = await A.adminCreateTokensBulk(jenis, jumlah, expMin);
+      if (!r.ok) {
+        A.setMsg('bm-msg', 'error', A.escapeHtml(r.error || 'Gagal generate.'));
+        return;
+      }
+      const tokens = r.tokens || [];
+      const expIso = r.expires_at;
+      const data = tokens.map(t => ({
+        nama: '', nis: '', kelas: '', sekolah: '',
+        token: t.token, expires_at: t.expires_at || expIso, jenis_tes: jenis
+      }));
+      A.setMsg('bm-msg', 'success', `<b>${data.length} token</b> berhasil dibuat. Berlaku sampai <b>${new Date(expIso).toLocaleString('id-ID')}</b>.`);
+      renderBulkResult(data);
+    },
+
+    async copyBulkCsv() {
+      const data = window.ABM._bulkResults || [];
+      if (!data.length) return;
+      const csv = bulkToCsv(data);
+      try {
+        await navigator.clipboard.writeText(csv);
+        A.toast(`${data.length} baris CSV disalin!`, 'success');
+      } catch (e) { A.toast('Gagal menyalin: ' + e.message, 'error'); }
+    },
+
+    async downloadBulkCsv() {
+      const data = window.ABM._bulkResults || [];
+      if (!data.length) return;
+      const blob = new Blob([bulkToCsv(data)], { type: 'text/csv;charset=utf-8' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'token-massal-' + Date.now() + '.csv';
+      a.click();
+      A.toast('CSV di-download!', 'success');
+    },
+
+    printBulkTokens() {
+      const data = window.ABM._bulkResults || [];
+      if (!data.length) return;
+      const url = window.location.origin + window.location.pathname;
+      const cards = data.map((d, i) => `
+        <div class="card-token">
+          <div class="head">KARTU TOKEN #${i + 1} · ${A.escapeHtml((d.jenis_tes || '').toUpperCase())}</div>
+          <div class="nama-blank">Nama: <span class="line"></span></div>
+          <div class="token">${A.escapeHtml(d.token)}</div>
+          <div class="meta">Berlaku sampai: <b>${new Date(d.expires_at).toLocaleString('id-ID')}</b></div>
+          <div class="meta">Buka: <b>${A.escapeHtml(url)}</b></div>
+          <div class="meta" style="margin-top:6px;font-size:10px;color:#888;">
+            Cara pakai: buka URL di atas → pilih tab Siswa → ketik token → isi nama &amp; identitas → mulai tes.
+          </div>
+        </div>`).join('');
+      const html = `<!doctype html>
+<html lang="id"><head><meta charset="utf-8"><title>Kartu Token Siswa - ABM</title>
+<style>
+  body { font-family: 'Segoe UI', Roboto, sans-serif; padding: 16px; background:#fff; margin:0; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .card-token { border: 2px dashed #66BB6A; border-radius: 12px; padding: 14px; page-break-inside: avoid; background: #F1F8E9; }
+  .head { font-size: 11px; font-weight: 700; color: #4CAF50; letter-spacing: 1px; }
+  .nama-blank { font-size: 13px; color: #555; margin: 8px 0; }
+  .nama-blank .line { display: inline-block; border-bottom: 1px solid #888; width: 70%; height: 18px; vertical-align: middle; }
+  .meta { font-size: 11px; color: #555; margin: 2px 0; }
+  .token { font-family: 'Courier New', monospace; font-size: 30px; letter-spacing: 5px; font-weight: 800; color: #1B5E20; background: #fff; padding: 8px 12px; border-radius: 6px; margin: 8px 0; text-align: center; border: 2px solid #66BB6A; }
+  @media print {
+    body { padding: 8px; }
+    .grid { gap: 8px; }
+    .card-token { page-break-inside: avoid; }
+    .no-print { display: none; }
+  }
+  button { background: #66BB6A; color: white; border: none; padding: 10px 20px; border-radius: 999px; cursor: pointer; font-weight: 600; margin-bottom: 14px; }
+</style></head>
+<body>
+  <div class="no-print">
+    <button onclick="window.print()">🖨️ Cetak Sekarang</button>
+    <span style="font-size:12px;color:#666;">Total: ${data.length} kartu token. Potong per kotak, bagikan ke siswa.</span>
+  </div>
+  <div class="grid">${cards}</div>
+  <script>setTimeout(() => window.print(), 400);</script>
+</body></html>`;
+      const w = window.open('', '_blank');
+      w.document.write(html);
+      w.document.close();
     },
 
     async downloadPdf(t) {
@@ -305,6 +425,45 @@
       A.toast('PDF di-download!', 'success');
     }
   };
+
+  // ---------- Helpers (bulk export & render) ----------
+  function bulkToCsv(data) {
+    const lines = ['no,token,jenis_tes,expires_at'];
+    data.forEach((d, i) => {
+      lines.push([i + 1, d.token, d.jenis_tes,
+        new Date(d.expires_at).toLocaleString('id-ID')
+      ].map(v => `"${String(v || '').replace(/"/g, '""')}"`).join(','));
+    });
+    return lines.join('\n');
+  }
+
+  function renderBulkResult(data) {
+    window.ABM._bulkResults = data;
+    const cont = document.getElementById('bm-result');
+    if (!cont) return;
+    if (!data.length) { cont.innerHTML = ''; return; }
+    const rows = data.map((d, i) => `
+      <tr>
+        <td>${i + 1}</td>
+        <td><b style="font-family:monospace;font-size:15px;letter-spacing:2px;">${A.escapeHtml(d.token)}</b></td>
+        <td><span class="badge ${d.jenis_tes === 'bakat' ? 'success' : 'info'}">${A.escapeHtml((d.jenis_tes || '').toUpperCase())}</span></td>
+        <td>${A.fmtTime(d.expires_at)}</td>
+        <td><button class="btn sm secondary" data-act="copyToken" data-token="${A.escapeHtml(d.token)}">📋 Salin</button></td>
+      </tr>`).join('');
+    cont.innerHTML = `
+      <div class="alert success">
+        <b>✅ ${data.length} token berhasil dibuat!</b> Pilih cara distribusi:
+      </div>
+      <div class="flex wrap" style="gap:8px; margin-bottom:12px;">
+        <button class="btn" data-act="printBulkTokens">🖨️ Cetak Kartu Token (siap potong &amp; bagi)</button>
+        <button class="btn secondary" data-act="downloadBulkCsv">⬇️ Download CSV</button>
+        <button class="btn secondary" data-act="copyBulkCsv">📋 Salin CSV</button>
+      </div>
+      <div class="table-wrap"><table class="data">
+        <thead><tr><th>No</th><th>Token</th><th>Jenis</th><th>Expired</th><th>Aksi</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>`;
+  }
 
   // ---------- Mapping builders (client-side) ----------
   function buildBakatMapping(seed) {

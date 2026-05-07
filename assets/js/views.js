@@ -126,13 +126,59 @@
       </div>`;
   }
 
-  // ---------- MENU VIEW (siswa setelah token valid) ----------
+  // ---------- SISWA-FORM VIEW (after token valid, before menu) ----------
+  function renderSiswaForm() {
+    const t = S.token || {};
+    const i = S.siswaInfo || {};
+    const jenisLabel = t.jenis_tes === 'bakat' ? '🧠 Tes Bakat' : t.jenis_tes === 'minat' ? '🎯 Tes Minat' : '-';
+    return `
+      <div class="card" style="max-width:640px;margin:0 auto;">
+        <h2>📝 Isi Identitas Anda</h2>
+        <p class="muted">Sebelum mengerjakan tes, mohon isi data diri di bawah. Data ini hanya untuk laporan & rekap admin.</p>
+        <div class="alert success" style="margin-bottom:16px;">
+          ✅ Token valid. Jenis tes: <b>${A.escapeHtml(jenisLabel)}</b>
+        </div>
+        <div id="sf-msg"></div>
+        <div class="form-group">
+          <label>Nama Lengkap <span style="color:var(--c-error)">*</span></label>
+          <input id="sf-nama" placeholder="Nama lengkap sesuai KTP/Kartu Pelajar" value="${A.escapeHtml(i.nama || '')}">
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>NIS / NISN</label>
+            <input id="sf-nis" placeholder="Nomor induk siswa" value="${A.escapeHtml(i.nis || '')}">
+          </div>
+          <div class="form-group"><label>Kelas</label>
+            <input id="sf-kelas" placeholder="mis. XII-IPA-1" value="${A.escapeHtml(i.kelas || '')}">
+          </div>
+        </div>
+        <div class="form-group"><label>Sekolah</label>
+          <input id="sf-sekolah" placeholder="Nama sekolah" value="${A.escapeHtml(i.sekolah || '')}">
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>Tanggal Lahir</label>
+            <input id="sf-tgl" type="date" value="${A.escapeHtml(i.tanggal_lahir || '')}">
+          </div>
+          <div class="form-group"><label>Jenis Kelamin</label>
+            <select id="sf-jk">
+              <option value="">-- Pilih --</option>
+              <option value="L" ${i.jenis_kelamin === 'L' ? 'selected' : ''}>Laki-laki</option>
+              <option value="P" ${i.jenis_kelamin === 'P' ? 'selected' : ''}>Perempuan</option>
+            </select>
+          </div>
+        </div>
+        <button class="btn full lg" data-act="siswaFormSubmit">Lanjut ke Tes →</button>
+      </div>`;
+  }
+
+  // ---------- MENU VIEW (siswa setelah identitas tersimpan) ----------
   function renderMenu() {
     const t = S.token || {};
+    const i = S.siswaInfo || {};
+    const nama = i.nama || t.siswa_nama || 'Siswa';
     return `
       <div class="card">
-        <h2>👋 Selamat datang, ${A.escapeHtml(t.siswa_nama || 'Siswa')}</h2>
-        <p class="muted">Token Anda: <b>${A.escapeHtml(S.tokenStr || '-')}</b> &middot; Jenis: <b>${A.escapeHtml((t.jenis_tes || '-').toUpperCase())}</b></p>
+        <h2>👋 Selamat datang, ${A.escapeHtml(nama)}</h2>
+        <p class="muted">Token: <b>${A.escapeHtml(S.tokenStr || '-')}</b> &middot; Jenis: <b>${A.escapeHtml((t.jenis_tes || '-').toUpperCase())}</b></p>
         <div class="alert info">
           <b>Info:</b> Jenis tes ditentukan oleh token. Klik kartu di bawah untuk mulai.
         </div>
@@ -302,6 +348,7 @@
         <div class="tabs">
           <button class="tab ${tab === 'stats' ? 'active' : ''}" data-admintab="stats">📈 Statistik</button>
           <button class="tab ${tab === 'token-buat' ? 'active' : ''}" data-admintab="token-buat">➕ Buat Token</button>
+          <button class="tab ${tab === 'massal' ? 'active' : ''}" data-admintab="massal">📦 Tambah Massal</button>
           <button class="tab ${tab === 'token-list' ? 'active' : ''}" data-admintab="token-list">🎫 Daftar Token</button>
           <button class="tab ${tab === 'hasil' ? 'active' : ''}" data-admintab="hasil">📋 Hasil & Laporan</button>
           <button class="tab ${tab === 'bank' ? 'active' : ''}" data-admintab="bank">📚 Bank Soal</button>
@@ -332,22 +379,46 @@
     }
     else if (tab === 'token-buat') {
       cont.innerHTML = `
+        <div class="alert info">
+          <b>Generate 1 token kosong.</b> Siswa akan input identitas (nama, NIS, kelas, sekolah) sendiri saat login.
+        </div>
         <div id="tk-msg"></div>
         <div class="form-row">
           <div class="form-group"><label>Jenis Tes</label>
             <select id="tk-jenis"><option value="bakat">Tes Bakat</option><option value="minat">Tes Minat</option></select>
           </div>
-          <div class="form-group"><label>Nama Siswa *</label>
-            <input id="tk-nama" placeholder="Nama lengkap">
+          <div class="form-group"><label>Berlaku (menit)</label>
+            <input type="number" id="tk-exp" value="5" min="1" max="480">
           </div>
         </div>
-        <div class="form-row">
-          <div class="form-group"><label>NIS</label><input id="tk-nis"></div>
-          <div class="form-group"><label>Kelas</label><input id="tk-kelas"></div>
-        </div>
-        <div class="form-group"><label>Sekolah</label><input id="tk-sekolah"></div>
-        <button class="btn lg" data-act="buatToken">Generate Token (5 menit)</button>
+        <button class="btn lg" data-act="buatToken">⚡ Generate Token</button>
         <div id="tk-result" style="margin-top:14px;"></div>`;
+    }
+    else if (tab === 'massal') {
+      cont.innerHTML = `
+        <div class="alert info">
+          <b>Generate banyak token kosong sekaligus</b> — siswa akan input identitas saat login. Cocok untuk testing 1 kelas / 1 angkatan sekaligus.
+        </div>
+        <div id="bm-msg"></div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Jenis Tes</label>
+            <select id="bm-jenis">
+              <option value="bakat">Tes Bakat</option>
+              <option value="minat">Tes Minat</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Jumlah Token</label>
+            <input type="number" id="bm-jumlah" value="30" min="1" max="500">
+          </div>
+          <div class="form-group">
+            <label>Berlaku (menit)</label>
+            <input type="number" id="bm-exp" value="60" min="1" max="480">
+          </div>
+        </div>
+        <button class="btn lg" data-act="bulkGenerate">⚡ Generate Token Massal</button>
+        <div id="bm-result" style="margin-top:18px;"></div>`;
     }
     else if (tab === 'token-list') {
       const r = await A.adminListTokens();
@@ -427,15 +498,17 @@
         <h2>📖 Panduan Penggunaan</h2>
         <h3>Untuk Admin</h3>
         <ol>
-          <li><b>Login</b> di halaman utama → tab Admin → masukkan email & password.</li>
-          <li>Buka tab <b>Buat Token</b> → isi nama siswa & jenis tes → klik Generate.</li>
-          <li>Token <b>berlaku 5 menit</b> dan hanya dapat dipakai <b>sekali</b>. Salin & bagikan ke siswa.</li>
-          <li>Setelah siswa selesai, lihat <b>Hasil &amp; Laporan</b> untuk download PDF.</li>
+          <li><b>Login</b> di halaman utama → tab Admin → masukkan email &amp; password.</li>
+          <li>Buka tab <b>➕ Buat Token</b> → pilih jenis tes &amp; durasi → klik Generate. (Tidak perlu isi nama siswa — siswa isi sendiri saat login.)</li>
+          <li>Untuk banyak siswa: tab <b>📦 Tambah Massal</b> → tentukan jumlah token → cetak kartu / download CSV.</li>
+          <li>Token <b>sekali pakai</b> dengan masa berlaku sesuai pilihan. Salin &amp; bagikan ke siswa.</li>
+          <li>Setelah siswa selesai, lihat <b>📑 Hasil &amp; Laporan</b> untuk download PDF.</li>
         </ol>
         <h3>Untuk Siswa</h3>
         <ol>
-          <li>Buka URL aplikasi → tab Siswa → masukkan token 8 karakter.</li>
-          <li>Klik <b>Mulai Tes</b> → kerjakan soal urut. Jawaban tersimpan otomatis.</li>
+          <li>Buka URL aplikasi → tab Siswa → masukkan token 8 karakter → klik <b>Mulai Tes</b>.</li>
+          <li><b>Isi identitas</b> Anda (nama wajib; NIS/kelas/sekolah/tanggal lahir/jenis kelamin opsional) → klik <b>Lanjut ke Tes</b>.</li>
+          <li>Klik kartu menu tes → kerjakan soal urut. Jawaban tersimpan otomatis.</li>
           <li>Setelah selesai, hasil ringkas akan tampil. PDF lengkap diunduh oleh admin.</li>
         </ol>
         <h3>Tentang ABM</h3>
@@ -460,14 +533,16 @@
 
   // ---------- View dispatcher ----------
   function rerender() {
-    const html = ({
-      login:   renderLogin(),
-      menu:    renderMenu(),
-      test:    renderTest(),
-      result:  renderResult(),
-      admin:   renderAdmin(),
-      panduan: renderPanduan()
-    })[S.currentView] || renderLogin();
+    const map = {
+      login:        renderLogin(),
+      'siswa-form': renderSiswaForm(),
+      menu:         renderMenu(),
+      test:         renderTest(),
+      result:       renderResult(),
+      admin:        renderAdmin(),
+      panduan:      renderPanduan()
+    };
+    const html = map[S.currentView] || renderLogin();
     document.getElementById('view-' + S.currentView).innerHTML = html;
     if (S.currentView === 'admin') renderAdminContent();
     if (S.currentView === 'test') startCountdown();

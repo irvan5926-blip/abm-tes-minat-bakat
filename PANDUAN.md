@@ -5,13 +5,15 @@
 1. **Dapatkan token** dari guru/admin (8 karakter, mis. `ABCD2345`).
 2. Buka URL aplikasi (mis. `https://username.github.io/abm-tes-minat-bakat/`).
 3. Pilih tab **Siswa** → masukkan token → klik **Mulai Tes →**.
-4. Kerjakan setiap soal dengan memilih jawaban (radio button untuk Bakat, klik kartu untuk Minat).
-5. Gunakan tombol **← Sebelumnya** / **Selanjutnya →** atau panah keyboard untuk navigasi.
-6. Di soal terakhir, klik **Selesai ✓**.
-7. Halaman ringkasan hasil akan tampil (skor, klasifikasi, prediksi IQ untuk Bakat).
-8. Klik **Selesai** untuk kembali ke halaman utama.
+4. **Isi identitas Anda** (nama, NIS, kelas, sekolah, tanggal lahir, jenis kelamin).
+5. Klik **Lanjut ke Tes →** → kartu menu tes muncul → klik untuk mulai.
+6. Kerjakan setiap soal dengan memilih jawaban (radio button untuk Bakat, klik kartu untuk Minat).
+7. Gunakan tombol **← Sebelumnya** / **Selanjutnya →** atau panah keyboard untuk navigasi.
+8. Di soal terakhir, klik **Selesai ✓**.
+9. Halaman ringkasan hasil akan tampil (skor, klasifikasi, prediksi IQ untuk Bakat).
+10. Klik **Selesai** untuk kembali ke halaman utama.
 
-> **Penting**: Token hanya berlaku 5 menit dan **sekali pakai**. Kalau token kadaluwarsa, mintalah token baru ke admin.
+> **Penting**: Token hanya berlaku sesuai durasi yang admin tentukan (default 5 menit) dan **sekali pakai**. Kalau token kadaluwarsa, mintalah token baru ke admin.
 
 ## Untuk Admin
 
@@ -19,15 +21,25 @@
 1. Daftar Supabase (lihat `README.md` bagian Setup).
 2. Daftar admin pertama lewat tab **Admin** → **Daftar di sini**.
 
-### Membuat Token
-1. Login admin → tab **Buat Token**.
-2. Pilih **Jenis Tes** (Bakat / Minat) — token hanya bisa untuk satu jenis.
-3. Isi nama siswa (wajib), NIS, kelas, sekolah (opsional).
-4. Klik **Generate Token (5 menit)**.
+### Membuat Token (1 buah)
+1. Login admin → tab **➕ Buat Token**.
+2. Pilih **Jenis Tes** (Bakat / Minat).
+3. Atur **Berlaku (menit)** — default 5 menit.
+4. Klik **⚡ Generate Token**.
 5. Salin token (atau URL siswa langsung) → kirim ke siswa.
+6. Siswa akan **isi identitas sendiri** saat login (nama, NIS, kelas, dll).
+
+### Membuat Token Massal (banyak siswa sekaligus)
+1. Login admin → tab **📦 Tambah Massal**.
+2. Pilih **Jenis Tes** + **Jumlah Token** (1-500) + **Berlaku (menit)** — default 60 menit untuk testing kelas.
+3. Klik **⚡ Generate Token Massal**.
+4. Pilih cara distribusi:
+   - **🖨️ Cetak Kartu Token**: buka tab baru berisi kartu siap potong (2 per baris) — bagikan ke siswa.
+   - **⬇️ Download CSV**: untuk arsip/Excel.
+   - **📋 Salin CSV**: paste ke Google Sheets.
 
 ### Memantau Token
-- Tab **Daftar Token**: lihat status semua token (Aktif / Terpakai / Expired / Dibatalkan).
+- Tab **🎫 Daftar Token**: lihat status semua token (Aktif / Terpakai / Expired / Dibatalkan).
 - Tombol **Batalkan**: matikan token aktif sebelum kadaluwarsa (jika salah generate).
 - Tombol **📋**: salin token ke clipboard.
 

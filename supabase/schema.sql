@@ -18,6 +18,8 @@
 -- Bersihkan jika ada (idempoten - aman dijalankan ulang)
 drop function if exists public.api_validate_token(text) cascade;
 drop function if exists public.api_start_session(text) cascade;
+drop function if exists public.api_start_session(text, text, text, text, text, date, text) cascade;
+drop function if exists public.api_admin_create_tokens_bulk(text, int, int, uuid) cascade;
 drop function if exists public.api_submit_answer(uuid, text, text, integer, text, boolean) cascade;
 drop function if exists public.api_finish_bakat(uuid, jsonb, jsonb, integer, jsonb) cascade;
 drop function if exists public.api_finish_minat(uuid, jsonb, jsonb, jsonb) cascade;
@@ -57,11 +59,12 @@ create table public.siswa (
 );
 create index idx_siswa_nis on public.siswa(nis);
 
--- Token siswa (8 char, expired 5 menit, sekali pakai)
+-- Token siswa (8 char, expired N menit (default 5), sekali pakai)
+-- Sejak v2.1: token TIDAK menyimpan siswa info. Siswa input identitas saat login.
 create table public.tokens (
   token text primary key,
   jenis_tes text not null check (jenis_tes in ('minat','bakat')),
-  siswa_nama text not null,
+  siswa_nama text default '',     -- legacy/optional, biasanya kosong
   siswa_nis text default '',
   siswa_kelas text default '',
   siswa_sekolah text default '',
@@ -184,19 +187,27 @@ begin
     'ok', true,
     'token', rec.token,
     'jenis_tes', rec.jenis_tes,
-    'siswa_nama', rec.siswa_nama,
-    'siswa_nis', rec.siswa_nis,
-    'siswa_kelas', rec.siswa_kelas,
-    'siswa_sekolah', rec.siswa_sekolah,
+    'siswa_nama', coalesce(rec.siswa_nama, ''),
+    'siswa_nis', coalesce(rec.siswa_nis, ''),
+    'siswa_kelas', coalesce(rec.siswa_kelas, ''),
+    'siswa_sekolah', coalesce(rec.siswa_sekolah, ''),
     'expires_at', rec.expires_at,
     'expires_in_seconds', greatest(0, extract(epoch from (rec.expires_at - now_ts))::int)
   );
 end;
 $$;
 
--- Mulai sesi: validasi token, mark TERPAKAI, buat siswa & sesi
--- Mapping pengacakan dibuat client-side menggunakan seed = sesi_id+token (deterministik).
-create or replace function public.api_start_session(p_token text)
+-- Mulai sesi: terima identitas siswa dari client, validasi token, mark TERPAKAI, buat siswa & sesi
+-- Sejak v2.1: siswa data dikirim oleh client (form identitas), bukan dari tokens table.
+create or replace function public.api_start_session(
+  p_token text,
+  p_siswa_nama text,
+  p_siswa_nis text default '',
+  p_siswa_kelas text default '',
+  p_siswa_sekolah text default '',
+  p_tanggal_lahir date default null,
+  p_jenis_kelamin text default null
+)
 returns jsonb
 language plpgsql
 security definer
@@ -208,20 +219,34 @@ declare
   v_siswa_id uuid;
   v_sesi_id uuid;
   v_existing record;
+  v_nama text := trim(coalesce(p_siswa_nama, ''));
+  v_nis  text := trim(coalesce(p_siswa_nis, ''));
+  v_kls  text := trim(coalesce(p_siswa_kelas, ''));
+  v_sek  text := trim(coalesce(p_siswa_sekolah, ''));
 begin
+  if v_nama = '' then
+    return jsonb_build_object('ok', false, 'error', 'Nama siswa wajib diisi.');
+  end if;
+
   v := public.api_validate_token(p_token);
   if (v->>'ok')::boolean = false then
     return v;
   end if;
   select * into rec from public.tokens where token = upper(p_token);
 
-  -- Cegah double-start: kalau sudah ada sesi belum selesai untuk token ini, kembalikan
+  -- Cegah double-start: kalau sudah ada sesi belum selesai untuk token ini, resume.
   select s.* into v_existing from public.sesi s where s.token = rec.token order by s.started_at desc limit 1;
   if found and v_existing.finished_at is null then
+    -- Update siswa info dari form (kalau ada perubahan)
+    update public.siswa
+      set nama = v_nama, nis = v_nis, kelas = v_kls, sekolah = v_sek,
+          tanggal_lahir = coalesce(p_tanggal_lahir, tanggal_lahir),
+          jenis_kelamin = coalesce(p_jenis_kelamin, jenis_kelamin)
+      where id = v_existing.siswa_id;
     return jsonb_build_object(
       'ok', true, 'resume', true,
       'sesi_id', v_existing.id, 'jenis_tes', v_existing.jenis_tes,
-      'siswa', jsonb_build_object('nama', rec.siswa_nama, 'nis', rec.siswa_nis, 'kelas', rec.siswa_kelas, 'sekolah', rec.siswa_sekolah),
+      'siswa', jsonb_build_object('nama', v_nama, 'nis', v_nis, 'kelas', v_kls, 'sekolah', v_sek),
       'mapping', v_existing.mapping
     );
   end if;
@@ -229,31 +254,78 @@ begin
     return jsonb_build_object('ok', false, 'error', 'Sesi sudah selesai sebelumnya.');
   end if;
 
-  -- Cari/insert siswa
-  if rec.siswa_nis is not null and rec.siswa_nis <> '' then
-    select id into v_siswa_id from public.siswa where nis = rec.siswa_nis limit 1;
-  end if;
-  if v_siswa_id is null then
-    insert into public.siswa(nama, nis, kelas, sekolah)
-    values (rec.siswa_nama, rec.siswa_nis, rec.siswa_kelas, rec.siswa_sekolah)
-    returning id into v_siswa_id;
-  end if;
+  -- Insert siswa baru (selalu insert, biar tiap sesi punya record sendiri)
+  insert into public.siswa(nama, nis, kelas, sekolah, tanggal_lahir, jenis_kelamin)
+  values (v_nama, v_nis, v_kls, v_sek, p_tanggal_lahir, p_jenis_kelamin)
+  returning id into v_siswa_id;
 
   insert into public.sesi(token, siswa_id, jenis_tes, mapping)
   values (rec.token, v_siswa_id, rec.jenis_tes, '{}'::jsonb)
   returning id into v_sesi_id;
 
-  update public.tokens set status='TERPAKAI', used_at=now() where token=rec.token;
+  update public.tokens
+    set status='TERPAKAI', used_at=now(),
+        siswa_nama = v_nama, siswa_nis = v_nis, siswa_kelas = v_kls, siswa_sekolah = v_sek
+    where token=rec.token;
 
   insert into public.audit_log(actor, action, detail)
-  values (v_siswa_id::text, 'START_SESSION', 'sesi=' || v_sesi_id || ' token=' || rec.token);
+  values (v_siswa_id::text, 'START_SESSION', 'sesi=' || v_sesi_id || ' token=' || rec.token || ' nama=' || v_nama);
 
   return jsonb_build_object(
     'ok', true, 'resume', false,
     'sesi_id', v_sesi_id, 'jenis_tes', rec.jenis_tes,
-    'siswa', jsonb_build_object('nama', rec.siswa_nama, 'nis', rec.siswa_nis, 'kelas', rec.siswa_kelas, 'sekolah', rec.siswa_sekolah),
+    'siswa', jsonb_build_object('nama', v_nama, 'nis', v_nis, 'kelas', v_kls, 'sekolah', v_sek),
     'mapping', '{}'::jsonb
   );
+end;
+$$;
+
+-- Generate banyak token sekaligus (admin only)
+create or replace function public.api_admin_create_tokens_bulk(
+  p_jenis_tes text, p_jumlah int, p_exp_minutes int default 5, p_admin_id uuid default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  i int := 0;
+  v_token text;
+  v_chars text := 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  v_tokens jsonb := '[]'::jsonb;
+  v_exp timestamptz;
+begin
+  if p_jenis_tes not in ('minat','bakat') then
+    return jsonb_build_object('ok', false, 'error', 'Jenis tes harus minat/bakat.');
+  end if;
+  if p_jumlah < 1 or p_jumlah > 500 then
+    return jsonb_build_object('ok', false, 'error', 'Jumlah harus 1-500.');
+  end if;
+  if p_exp_minutes < 1 or p_exp_minutes > 480 then
+    return jsonb_build_object('ok', false, 'error', 'Lama berlaku 1-480 menit.');
+  end if;
+  v_exp := now() + (p_exp_minutes || ' minutes')::interval;
+  while i < p_jumlah loop
+    -- Generate 8-char token (A-Z minus I/O, 2-9)
+    v_token := '';
+    for j in 1..8 loop
+      v_token := v_token || substr(v_chars, 1 + (random() * 31)::int, 1);
+    end loop;
+    -- Skip kalau collision (sangat jarang)
+    begin
+      insert into public.tokens(token, jenis_tes, admin_id, expires_at)
+      values (v_token, p_jenis_tes, p_admin_id, v_exp);
+      v_tokens := v_tokens || jsonb_build_object('token', v_token, 'expires_at', v_exp);
+      i := i + 1;
+    exception when unique_violation then
+      -- retry, jangan increment
+      continue;
+    end;
+  end loop;
+  insert into public.audit_log(actor, action, detail)
+  values (coalesce(p_admin_id::text, 'admin'), 'BULK_GENERATE', 'jumlah=' || p_jumlah || ' jenis=' || p_jenis_tes || ' exp_min=' || p_exp_minutes);
+  return jsonb_build_object('ok', true, 'tokens', v_tokens, 'jumlah', p_jumlah, 'expires_at', v_exp);
 end;
 $$;
 
@@ -374,7 +446,8 @@ $$;
 
 -- Grant execute pada semua RPC `api_*` ke role anon (siswa) & authenticated (admin)
 grant execute on function public.api_validate_token(text) to anon, authenticated;
-grant execute on function public.api_start_session(text) to anon, authenticated;
+grant execute on function public.api_start_session(text, text, text, text, text, date, text) to anon, authenticated;
+grant execute on function public.api_admin_create_tokens_bulk(text, int, int, uuid) to authenticated;
 grant execute on function public.api_save_mapping(uuid, jsonb) to anon, authenticated;
 grant execute on function public.api_submit_answer(uuid, text, text, int, text, boolean) to anon, authenticated;
 grant execute on function public.api_finish_bakat(uuid, jsonb, jsonb, int, jsonb) to anon, authenticated;
