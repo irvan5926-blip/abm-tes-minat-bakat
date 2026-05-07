@@ -40,6 +40,7 @@
   function setupGlobalDelegation() {
     document.addEventListener('click', onClick);
     document.addEventListener('change', onChange);
+    document.addEventListener('input', onInput);
     document.addEventListener('keydown', onKeydown);
   }
 
@@ -86,6 +87,21 @@
     }
   }
 
+  // Live update untuk text input (number answer_type)
+  let _numDebounce = null;
+  function onInput(e) {
+    if (e.target && e.target.id === 'i-soal') {
+      const T = S.test;
+      if (!T) return;
+      const s = T.soal[T.idx];
+      const val = String(e.target.value || '').trim();
+      T.answers[s.id] = val;
+      // Debounce push agar tidak spam server
+      if (_numDebounce) clearTimeout(_numDebounce);
+      _numDebounce = setTimeout(() => pushAnswer(s, val), 500);
+    }
+  }
+
   function onKeydown(e) {
     if (S.currentView !== 'test') return;
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
@@ -110,20 +126,40 @@
     let subtes = null;
     if (T.jenis === 'bakat') {
       const orig = A.BAKAT_SOAL.find(x => x.id === s.id);
-      benar = orig && String(orig.kunci).toLowerCase() === String(jawaban).toLowerCase();
+      benar = orig ? answerIsCorrect(orig, jawaban) : null;
       subtes = s.subtes;
     } else {
       subtes = T.subtesTag || 'BIDANG_1';
     }
+    if (!String(jawaban || '').trim()) return; // jangan push jawaban kosong
     const r = await A.submitAnswer(S.sesiId, s.id, String(jawaban), s.no_tampil, subtes, benar);
     if (!r.ok) console.warn('submit_answer failed', r.error);
+  }
+
+  // Compare jawaban siswa dgn kunci, mempertimbangkan answer_type.
+  function answerIsCorrect(soal, jawaban) {
+    const at = (soal.answer_type || 'letter5').toLowerCase();
+    const kunci = String(soal.kunci || '').toLowerCase().trim();
+    const j = String(jawaban || '').toLowerCase().trim();
+    if (!kunci) return null;
+    if (at === 'number') {
+      // Normalisasi koma → titik untuk angka desimal id-ID
+      const a = kunci.replace(',', '.').replace(/\s+/g, '');
+      const b = j.replace(',', '.').replace(/\s+/g, '');
+      if (a === b) return true;
+      const na = parseFloat(a), nb = parseFloat(b);
+      if (!isNaN(na) && !isNaN(nb)) return Math.abs(na - nb) < 1e-9;
+      return false;
+    }
+    return kunci === j;
   }
 
   // ---------- Actions ----------
   const actions = {
     goLogin() {
       // Reset state untuk siswa
-      S.token = null; S.tokenStr = null; S.test = null; S.result = null; S.sesiId = null;
+      S.token = null; S.tokenStr = null; S.siswaInfo = null;
+      S.test = null; S.result = null; S.sesiId = null;
       A.show('login'); A.rerender();
     },
     goPanduan() { A.show('panduan'); A.rerender(); },
@@ -145,6 +181,32 @@
       A.setMsg('login-siswa-msg', '', '');
       S.tokenStr = r.token;
       S.token = r;
+      // Pre-fill siswaInfo dari token (kalau admin sempat isi data, biasanya kosong)
+      S.siswaInfo = {
+        nama: r.siswa_nama || '',
+        nis: r.siswa_nis || '',
+        kelas: r.siswa_kelas || '',
+        sekolah: r.siswa_sekolah || ''
+      };
+      A.show('siswa-form');
+      A.rerender();
+    },
+
+    siswaFormSubmit() {
+      const nama = (document.getElementById('sf-nama').value || '').trim();
+      if (!nama) {
+        A.setMsg('sf-msg', 'error', 'Nama lengkap wajib diisi.');
+        return;
+      }
+      S.siswaInfo = {
+        nama,
+        nis: (document.getElementById('sf-nis').value || '').trim(),
+        kelas: (document.getElementById('sf-kelas').value || '').trim(),
+        sekolah: (document.getElementById('sf-sekolah').value || '').trim(),
+        tanggal_lahir: (document.getElementById('sf-tgl').value || '') || null,
+        jenis_kelamin: (document.getElementById('sf-jk').value || '') || null
+      };
+      A.toast('Identitas tersimpan. Klik kartu untuk mulai tes.', 'success');
       A.show('menu');
       A.rerender();
     },
@@ -196,8 +258,22 @@
     // ---- Mulai tes ----
     async startTes(t) {
       const jenis = t.dataset.jenis;
+      if (!S.siswaInfo || !S.siswaInfo.nama) {
+        A.toast('Silakan isi identitas terlebih dahulu.', 'error');
+        A.show('siswa-form'); A.rerender();
+        return;
+      }
       A.toast('⏳ Memulai sesi tes...', 'info');
-      const r = await A.startSession(S.tokenStr);
+      // Untuk bakat: load bank soal aktif dari DB dulu (bisa 30+ entries)
+      if (jenis === 'bakat') {
+        const lr = await A.loadBakatBank();
+        if (lr.source === 'demo') {
+          A.toast('⚠️ Bank Soal DB kosong — pakai demo bawaan.', 'info', 4000);
+        } else {
+          A.toast(`✓ Bank Soal: ${lr.count} soal aktif dari DB`, 'success', 2500);
+        }
+      }
+      const r = await A.startSession(S.tokenStr, S.siswaInfo);
       if (!r.ok) { A.toast('Error: ' + r.error, 'error'); return; }
       S.sesiId = r.sesi_id;
 
@@ -208,12 +284,17 @@
       if (jenis === 'bakat') {
         mapping = buildBakatMapping(seed);
         soal = mappingToBakatSoal(mapping);
+        // Sign image URLs (1 round-trip untuk semua image_path)
+        let imageUrls = {};
+        try { imageUrls = await A.signBakatPages(soal); }
+        catch (e) { console.warn('signBakatPages failed', e); }
         S.test = {
           jenis: 'bakat',
           soal,
           idx: 0,
           answers: {},
           mapping,
+          imageUrls,
           expires_at: r.expires_at || S.token.expires_at
         };
       } else {
@@ -267,32 +348,120 @@
     },
 
     async buatToken() {
-      const payload = {
-        jenis_tes: document.getElementById('tk-jenis').value,
-        siswa_nama: document.getElementById('tk-nama').value.trim(),
-        siswa_nis: document.getElementById('tk-nis').value.trim(),
-        siswa_kelas: document.getElementById('tk-kelas').value.trim(),
-        siswa_sekolah: document.getElementById('tk-sekolah').value.trim()
-      };
+      const jenis = document.getElementById('tk-jenis').value;
+      const expMin = parseInt(document.getElementById('tk-exp').value, 10) || 5;
       A.setMsg('tk-msg', 'info', '⏳ Generate token...');
-      const r = await A.adminCreateToken(payload);
+      const r = await A.adminCreateToken({ jenis_tes: jenis, exp_minutes: expMin });
       if (!r.ok) { A.setMsg('tk-msg', 'error', A.escapeHtml(r.error)); return; }
       A.setMsg('tk-msg', '', '');
       const url = window.location.origin + window.location.pathname + '?token=' + r.token;
       document.getElementById('tk-result').innerHTML = `
         <div class="token-box">
-          <div class="muted">Token Berhasil Dibuat (berlaku 5 menit)</div>
+          <div class="muted">Token Berhasil Dibuat (berlaku ${expMin} menit) — ${A.escapeHtml(jenis.toUpperCase())}</div>
           <div class="token-text">${r.token}</div>
           <button class="btn secondary" data-act="copyToken" data-token="${r.token}">📋 Salin Token</button>
           <button class="btn secondary" data-act="copyUrl" data-url="${A.escapeHtml(url)}">🔗 Salin URL Siswa</button>
         </div>
-        <p class="muted text-center">URL siswa: <code>${A.escapeHtml(url)}</code></p>`;
+        <p class="muted text-center">URL siswa: <code>${A.escapeHtml(url)}</code></p>
+        <p class="muted text-center" style="font-size:12px;">Siswa akan diminta isi nama &amp; identitas saat login.</p>`;
       A.toast('Token dibuat: ' + r.token, 'success');
     },
 
     async copyUrl(t) {
       try { await navigator.clipboard.writeText(t.dataset.url); A.toast('URL disalin!', 'success'); }
       catch (e) { A.toast('Gagal menyalin: ' + e.message, 'error'); }
+    },
+
+    async bulkGenerate() {
+      const jenis  = document.getElementById('bm-jenis').value;
+      const jumlah = parseInt(document.getElementById('bm-jumlah').value, 10) || 0;
+      const expMin = parseInt(document.getElementById('bm-exp').value, 10)    || 5;
+      if (jumlah < 1 || jumlah > 500) {
+        A.setMsg('bm-msg', 'error', 'Jumlah token harus 1-500.');
+        return;
+      }
+      A.setMsg('bm-msg', 'info', `⏳ Generating ${jumlah} token...`);
+      const r = await A.adminCreateTokensBulk(jenis, jumlah, expMin);
+      if (!r.ok) {
+        A.setMsg('bm-msg', 'error', A.escapeHtml(r.error || 'Gagal generate.'));
+        return;
+      }
+      const tokens = r.tokens || [];
+      const expIso = r.expires_at;
+      const data = tokens.map(t => ({
+        nama: '', nis: '', kelas: '', sekolah: '',
+        token: t.token, expires_at: t.expires_at || expIso, jenis_tes: jenis
+      }));
+      A.setMsg('bm-msg', 'success', `<b>${data.length} token</b> berhasil dibuat. Berlaku sampai <b>${new Date(expIso).toLocaleString('id-ID')}</b>.`);
+      renderBulkResult(data);
+    },
+
+    async copyBulkCsv() {
+      const data = window.ABM._bulkResults || [];
+      if (!data.length) return;
+      const csv = bulkToCsv(data);
+      try {
+        await navigator.clipboard.writeText(csv);
+        A.toast(`${data.length} baris CSV disalin!`, 'success');
+      } catch (e) { A.toast('Gagal menyalin: ' + e.message, 'error'); }
+    },
+
+    async downloadBulkCsv() {
+      const data = window.ABM._bulkResults || [];
+      if (!data.length) return;
+      const blob = new Blob([bulkToCsv(data)], { type: 'text/csv;charset=utf-8' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'token-massal-' + Date.now() + '.csv';
+      a.click();
+      A.toast('CSV di-download!', 'success');
+    },
+
+    printBulkTokens() {
+      const data = window.ABM._bulkResults || [];
+      if (!data.length) return;
+      const url = window.location.origin + window.location.pathname;
+      const cards = data.map((d, i) => `
+        <div class="card-token">
+          <div class="head">KARTU TOKEN #${i + 1} · ${A.escapeHtml((d.jenis_tes || '').toUpperCase())}</div>
+          <div class="nama-blank">Nama: <span class="line"></span></div>
+          <div class="token">${A.escapeHtml(d.token)}</div>
+          <div class="meta">Berlaku sampai: <b>${new Date(d.expires_at).toLocaleString('id-ID')}</b></div>
+          <div class="meta">Buka: <b>${A.escapeHtml(url)}</b></div>
+          <div class="meta" style="margin-top:6px;font-size:10px;color:#888;">
+            Cara pakai: buka URL di atas → pilih tab Siswa → ketik token → isi nama &amp; identitas → mulai tes.
+          </div>
+        </div>`).join('');
+      const html = `<!doctype html>
+<html lang="id"><head><meta charset="utf-8"><title>Kartu Token Siswa - ABM</title>
+<style>
+  body { font-family: 'Segoe UI', Roboto, sans-serif; padding: 16px; background:#fff; margin:0; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .card-token { border: 2px dashed #66BB6A; border-radius: 12px; padding: 14px; page-break-inside: avoid; background: #F1F8E9; }
+  .head { font-size: 11px; font-weight: 700; color: #4CAF50; letter-spacing: 1px; }
+  .nama-blank { font-size: 13px; color: #555; margin: 8px 0; }
+  .nama-blank .line { display: inline-block; border-bottom: 1px solid #888; width: 70%; height: 18px; vertical-align: middle; }
+  .meta { font-size: 11px; color: #555; margin: 2px 0; }
+  .token { font-family: 'Courier New', monospace; font-size: 30px; letter-spacing: 5px; font-weight: 800; color: #1B5E20; background: #fff; padding: 8px 12px; border-radius: 6px; margin: 8px 0; text-align: center; border: 2px solid #66BB6A; }
+  @media print {
+    body { padding: 8px; }
+    .grid { gap: 8px; }
+    .card-token { page-break-inside: avoid; }
+    .no-print { display: none; }
+  }
+  button { background: #66BB6A; color: white; border: none; padding: 10px 20px; border-radius: 999px; cursor: pointer; font-weight: 600; margin-bottom: 14px; }
+</style></head>
+<body>
+  <div class="no-print">
+    <button onclick="window.print()">🖨️ Cetak Sekarang</button>
+    <span style="font-size:12px;color:#666;">Total: ${data.length} kartu token. Potong per kotak, bagikan ke siswa.</span>
+  </div>
+  <div class="grid">${cards}</div>
+  <script>setTimeout(() => window.print(), 400);</script>
+</body></html>`;
+      const w = window.open('', '_blank');
+      w.document.write(html);
+      w.document.close();
     },
 
     async downloadPdf(t) {
@@ -303,8 +472,238 @@
       const mapping = r.sesi && r.sesi.mapping;
       A.downloadFromHasil(r.hasil, r.siswa, mapping);
       A.toast('PDF di-download!', 'success');
+    },
+
+    // ---- Bank Soal (admin) ----
+    bsAdd() {
+      const host = document.getElementById('bs-modal-host');
+      if (!host) return;
+      host.innerHTML = A.renderBankSoalEditor(null);
+    },
+    async bsEdit(t) {
+      const id = t.dataset.id;
+      const r = await A.adminBankSoalList(null);
+      if (!r.ok) { A.toast(r.error, 'error'); return; }
+      const row = (r.rows || []).find(x => x.id === id);
+      if (!row) { A.toast('Soal tidak ditemukan.', 'error'); return; }
+      const host = document.getElementById('bs-modal-host');
+      if (!host) return;
+      host.innerHTML = A.renderBankSoalEditor(row);
+    },
+    bsCancel() {
+      const host = document.getElementById('bs-modal-host');
+      if (host) host.innerHTML = '';
+    },
+    async bsSave() {
+      const id = document.getElementById('bs-id').value || null;
+      const subtes = document.getElementById('bs-subtes').value;
+      const no = parseInt(document.getElementById('bs-no').value, 10);
+      const sub_index = parseInt(document.getElementById('bs-subindex').value, 10) || 0;
+      const answer_type = document.getElementById('bs-at').value;
+      const kunci = (document.getElementById('bs-kunci').value || '').trim().toLowerCase();
+      const active = document.getElementById('bs-active').value === 'true';
+      const durasi_menit = parseInt(document.getElementById('bs-durasi').value, 10) || null;
+      const label = (document.getElementById('bs-label').value || '').trim();
+      const image_path = (document.getElementById('bs-imgpath').value || '').trim();
+      if (!subtes || !no) {
+        A.setMsg('bs-msg', 'error', 'Subtes & No wajib diisi.');
+        return;
+      }
+      if (!kunci) {
+        A.setMsg('bs-msg', 'error', 'Kunci jawaban wajib.');
+        return;
+      }
+      A.setMsg('bs-msg', 'info', '⏳ Menyimpan...');
+      const r = await A.adminBankSoalUpsert({
+        id, subtes, no, sub_index, image_path, answer_type, kunci,
+        label, active, durasi_menit
+      });
+      if (!r.ok) { A.setMsg('bs-msg', 'error', A.escapeHtml(r.error || 'Gagal simpan.')); return; }
+      A.toast('Soal tersimpan.', 'success');
+      actions.bsCancel();
+      A.renderAdminContent();
+    },
+    async bsDelete(t) {
+      const id = t.dataset.id;
+      if (!confirm('Hapus soal ini? Tidak bisa dibatalkan.')) return;
+      const r = await A.adminBankSoalDelete(id);
+      if (!r.ok) { A.toast(r.error, 'error'); return; }
+      A.toast('Soal dihapus.', 'success');
+      A.renderAdminContent();
+    },
+    async bsPreview(t) {
+      const path = t.dataset.path;
+      const r = await A.adminSignBakatImage(path);
+      if (!r.ok) { A.toast(r.error, 'error'); return; }
+      const w = window.open('', '_blank', 'noopener,noreferrer');
+      if (w) {
+        w.document.write(`<title>Preview ${A.escapeHtml(path)}</title>
+          <body style="margin:0;background:#000;display:flex;align-items:center;justify-content:center;min-height:100vh;">
+          <img src="${A.escapeHtml(r.url)}" style="max-width:100%;max-height:100vh;">`);
+        w.document.close();
+      } else {
+        window.location.href = r.url;
+      }
+    },
+    bsPickImg() {
+      const f = document.getElementById('bs-imgfile');
+      if (!f) return;
+      f.onchange = async (e) => {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+        const subtes = document.getElementById('bs-subtes').value || 'BS';
+        const no = document.getElementById('bs-no').value || 'X';
+        const subIdx = parseInt(document.getElementById('bs-subindex').value, 10) || 0;
+        const suggested = subtes + '-' + String(no).padStart(3,'0') + (subIdx ? '-' + subIdx : '');
+        const msg = document.getElementById('bs-imgmsg');
+        if (msg) msg.textContent = '⏳ Upload ' + (file.size/1024).toFixed(0) + ' KB...';
+        const r = await A.adminUploadBakatImage(file, suggested);
+        if (!r.ok) {
+          if (msg) msg.textContent = '❌ ' + r.error;
+          return;
+        }
+        document.getElementById('bs-imgpath').value = r.path;
+        if (msg) msg.textContent = '✓ Tersimpan: ' + r.path;
+      };
+      f.click();
+    },
+    bsImportCsv() {
+      const host = document.getElementById('bs-modal-host');
+      if (!host) return;
+      host.innerHTML = A.renderBankSoalImportModal();
+    },
+    bsImportCancel() { actions.bsCancel(); },
+    async bsImportRun() {
+      const txt = (document.getElementById('bs-import-text').value || '').trim();
+      if (!txt) {
+        A.setMsg('bs-import-msg', 'error', 'Tempel CSV dulu.');
+        return;
+      }
+      let items;
+      try { items = parseCsvToBankSoal(txt); }
+      catch (e) {
+        A.setMsg('bs-import-msg', 'error', A.escapeHtml(e.message || 'Format CSV tidak valid.'));
+        return;
+      }
+      if (!items.length) {
+        A.setMsg('bs-import-msg', 'error', 'Tidak ada baris valid.');
+        return;
+      }
+      A.setMsg('bs-import-msg', 'info', `⏳ Import ${items.length} entry...`);
+      const r = await A.adminBankSoalBulkUpsert(items);
+      if (!r.ok) { A.setMsg('bs-import-msg', 'error', A.escapeHtml(r.error || 'Gagal import.')); return; }
+      A.toast(`✓ ${r.count || items.length} soal di-upsert.`, 'success');
+      actions.bsCancel();
+      A.renderAdminContent();
+    },
+    async bsExportCsv() {
+      const r = await A.adminBankSoalList(null);
+      if (!r.ok) { A.toast(r.error, 'error'); return; }
+      const csv = bankSoalToCsv(r.rows || []);
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'bank-soal-bakat-' + Date.now() + '.csv';
+      a.click();
+      A.toast('CSV di-download!', 'success');
     }
   };
+
+  // ---- CSV helpers untuk bank soal ----
+  function parseCsvToBankSoal(text) {
+    const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+    if (lines.length < 2) throw new Error('CSV harus minimal 2 baris (header + data).');
+    const header = splitCsvLine(lines[0]).map(h => h.toLowerCase());
+    const required = ['subtes','no','answer_type','kunci'];
+    required.forEach(c => { if (header.indexOf(c) < 0) throw new Error('Header wajib: ' + c); });
+    const items = [];
+    for (let i = 1; i < lines.length; i++) {
+      const cols = splitCsvLine(lines[i]);
+      const row = {};
+      header.forEach((h, j) => { row[h] = (cols[j] || '').trim(); });
+      if (!row.subtes || !row.no) continue;
+      items.push({
+        subtes: row.subtes.toUpperCase(),
+        no: parseInt(row.no, 10),
+        sub_index: parseInt(row.sub_index || '0', 10),
+        image_path: row.image_path || '',
+        answer_type: (row.answer_type || 'letter5').toLowerCase(),
+        kunci: (row.kunci || '').toLowerCase(),
+        label: row.label || '',
+        active: !(row.active && row.active.toLowerCase() === 'false')
+      });
+    }
+    return items;
+  }
+
+  function splitCsvLine(line) {
+    const out = [];
+    let cur = '', q = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (q) {
+        if (c === '"' && line[i+1] === '"') { cur += '"'; i++; }
+        else if (c === '"') { q = false; }
+        else cur += c;
+      } else {
+        if (c === '"') q = true;
+        else if (c === ',') { out.push(cur); cur = ''; }
+        else cur += c;
+      }
+    }
+    out.push(cur);
+    return out;
+  }
+
+  function bankSoalToCsv(rows) {
+    const head = ['subtes','no','sub_index','image_path','answer_type','kunci','label','active'];
+    const esc = v => {
+      const s = String(v == null ? '' : v);
+      return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    };
+    return [head.join(',')].concat(
+      rows.map(r => head.map(h => esc(r[h])).join(','))
+    ).join('\n');
+  }
+
+  // ---------- Helpers (bulk export & render) ----------
+  function bulkToCsv(data) {
+    const lines = ['no,token,jenis_tes,expires_at'];
+    data.forEach((d, i) => {
+      lines.push([i + 1, d.token, d.jenis_tes,
+        new Date(d.expires_at).toLocaleString('id-ID')
+      ].map(v => `"${String(v || '').replace(/"/g, '""')}"`).join(','));
+    });
+    return lines.join('\n');
+  }
+
+  function renderBulkResult(data) {
+    window.ABM._bulkResults = data;
+    const cont = document.getElementById('bm-result');
+    if (!cont) return;
+    if (!data.length) { cont.innerHTML = ''; return; }
+    const rows = data.map((d, i) => `
+      <tr>
+        <td>${i + 1}</td>
+        <td><b style="font-family:monospace;font-size:15px;letter-spacing:2px;">${A.escapeHtml(d.token)}</b></td>
+        <td><span class="badge ${d.jenis_tes === 'bakat' ? 'success' : 'info'}">${A.escapeHtml((d.jenis_tes || '').toUpperCase())}</span></td>
+        <td>${A.fmtTime(d.expires_at)}</td>
+        <td><button class="btn sm secondary" data-act="copyToken" data-token="${A.escapeHtml(d.token)}">📋 Salin</button></td>
+      </tr>`).join('');
+    cont.innerHTML = `
+      <div class="alert success">
+        <b>✅ ${data.length} token berhasil dibuat!</b> Pilih cara distribusi:
+      </div>
+      <div class="flex wrap" style="gap:8px; margin-bottom:12px;">
+        <button class="btn" data-act="printBulkTokens">🖨️ Cetak Kartu Token (siap potong &amp; bagi)</button>
+        <button class="btn secondary" data-act="downloadBulkCsv">⬇️ Download CSV</button>
+        <button class="btn secondary" data-act="copyBulkCsv">📋 Salin CSV</button>
+      </div>
+      <div class="table-wrap"><table class="data">
+        <thead><tr><th>No</th><th>Token</th><th>Jenis</th><th>Expired</th><th>Aksi</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>`;
+  }
 
   // ---------- Mapping builders (client-side) ----------
   function buildBakatMapping(seed) {
@@ -325,12 +724,21 @@
     const bank = Object.fromEntries(A.BAKAT_SOAL.map(s => [s.id, s]));
     return mapping.urutan.map(u => {
       const s = bank[u.id_asli];
+      if (!s) return null;
       return {
-        id: s.id, no_tampil: u.no_tampil,
-        no_asli: parseInt(s.id.replace(/^[A-Z]+/, ''), 10),
-        subtes: s.subtes, pertanyaan: s.pertanyaan, opsi: s.opsi
+        id: s.id,
+        no_tampil: u.no_tampil,
+        no_asli: s.no_asli || parseInt(String(s.id).replace(/^[A-Z]+/, '').split('_')[0], 10) || 0,
+        sub_index: s.sub_index || 0,
+        subtes: s.subtes,
+        pertanyaan: s.pertanyaan || s.label || '',
+        label: s.label || '',
+        image_path: s.image_path || '',
+        answer_type: s.answer_type || 'letter5',
+        kunci: s.kunci || '',
+        opsi: s.opsi || A.defaultOpsiFor(s.answer_type || 'letter5')
       };
-    });
+    }).filter(x => x);
   }
 
   function buildMinatBidang1Mapping(seed) {
@@ -378,8 +786,8 @@
       const j = T.answers[s.id];
       if (!j) return;
       const orig = A.BAKAT_SOAL.find(x => x.id === s.id);
-      const benar = orig && String(orig.kunci).toLowerCase() === String(j).toLowerCase();
-      jawabanList.push({ soal_id: s.id, jawaban: j, benar, subtes: s.subtes });
+      const benar = orig ? answerIsCorrect(orig, j) : null;
+      jawabanList.push({ soal_id: s.id, jawaban: String(j), benar: !!benar, subtes: s.subtes });
     });
     const result = A.scoreBakat(jawabanList, T.mapping);
     const r = await A.finishBakat(S.sesiId, result.skor, result.klasifikasi, result.iq_prediksi, result.rekomendasi);

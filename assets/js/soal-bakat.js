@@ -1,9 +1,7 @@
 // =====================================================================
 // Bank soal Tes Bakat
 // =====================================================================
-// Mengikuti struktur 9 subtes "Buku Panduan Bakat & Minat SMK"
-// (Direktorat Pembinaan SMK 2016) yang dipetakan ke 7 dimensi ABM
-// (Pusmendik 2024).
+// Struktur 9 subtes ABM yang dipetakan ke 7 dimensi (Pusmendik 2024):
 //
 //   Subtes                    -> Dimensi ABM
 //   1. Penalaran Visual (PV)  -> Spasial
@@ -16,26 +14,38 @@
 //   8. Kosa Kata (KK)         -> Bahasa
 //   9. Figural Angka (FA)     -> Kuantitatif
 //
-// CARA MENAMBAH/MENGGANTI SOAL:
-//   Edit array BAKAT_SOAL di bawah. Tiap entry:
-//     { id:'PV09', subtes:'PV', pertanyaan:'...', opsi:{a,b,c,d,e}, kunci:'b' }
-//   ID = kode subtes + 2 digit (PV01..PV99). Konvensi ini dipakai oleh
-//   skoring & audit pengacakan (no_asli -> no_tampil).
+// MODEL KONTEN (sejak v2.2):
+//   Soal aktif disimpan di DB Supabase tabel `bank_soal_bakat`. Admin
+//   meng-upload gambar halaman ke Supabase Storage bucket "bakat-pages"
+//   dan mengelola entry soal lewat tab "Bank Soal" di dashboard admin.
+//   Frontend memuat soal aktif via RPC `api_get_bank_soal_active`.
+//
+//   File ini menyediakan:
+//   - BAKAT_SUBTES: definisi 9 subtes + answer_type default + dimensi
+//   - BAKAT_SOAL_DEMO: bank soal demo (text-based) sebagai fallback
+//     bila admin belum upload bank soal di DB.
+//   - loadBakatBank(): async, ambil bank soal aktif. Auto fallback ke
+//     BAKAT_SOAL_DEMO jika DB kosong / Supabase belum dikonfigurasi.
+//   - BAKAT_SOAL: legacy alias (dipakai oleh PDF audit, dll). Diupdate
+//     setelah loadBakatBank() selesai.
 // =====================================================================
 
 const BAKAT_SUBTES = [
-  { kode:'PV', nama:'Penalaran Visual',   dimensi:'Spasial',     durasi:8 },
-  { kode:'PN', nama:'Penalaran Numerik',  dimensi:'Kuantitatif', durasi:8 },
-  { kode:'AV', nama:'Analisa Verbal',     dimensi:'Verbal',      durasi:10 },
-  { kode:'PU', nama:'Penalaran Urutan',   dimensi:'Penalaran',   durasi:8 },
-  { kode:'PS', nama:'Pengenalan Spasial', dimensi:'Spasial',     durasi:6 },
-  { kode:'TD', nama:'Tiga Dimensi',       dimensi:'Mekanika',    durasi:6 },
-  { kode:'SI', nama:'Sistematisasi',      dimensi:'Klerikal',    durasi:6 },
-  { kode:'KK', nama:'Kosa Kata',          dimensi:'Bahasa',      durasi:6 },
-  { kode:'FA', nama:'Figural Angka',      dimensi:'Kuantitatif', durasi:8 }
+  { kode:'PV', nama:'Penalaran Visual',   dimensi:'Spasial',     durasi:8,  answer_type:'letter5' },
+  { kode:'PN', nama:'Penalaran Numerik',  dimensi:'Kuantitatif', durasi:10, answer_type:'number'  },
+  { kode:'AV', nama:'Analisa Verbal',     dimensi:'Verbal',      durasi:12, answer_type:'letter6' },
+  { kode:'PU', nama:'Penalaran Urutan',   dimensi:'Penalaran',   durasi:10, answer_type:'letter5' },
+  { kode:'PS', nama:'Pengenalan Spasial', dimensi:'Spasial',     durasi:8,  answer_type:'sb'      },
+  { kode:'TD', nama:'Tiga Dimensi',       dimensi:'Mekanika',    durasi:10, answer_type:'letter5' },
+  { kode:'SI', nama:'Sistematisasi',      dimensi:'Klerikal',    durasi:15, answer_type:'letter5' },
+  { kode:'KK', nama:'Kosa Kata',          dimensi:'Bahasa',      durasi:10, answer_type:'letter4' },
+  { kode:'FA', nama:'Figural Angka',      dimensi:'Kuantitatif', durasi:10, answer_type:'number'  }
 ];
 
-const BAKAT_SOAL = [
+// Bank soal DEMO — fallback bila admin belum upload bank soal di DB.
+// Konten generik (urutan angka, geometri dasar). Tidak diperlukan saat
+// `bank_soal_bakat` di Supabase sudah berisi soal aktif.
+const BAKAT_SOAL_DEMO = [
   // --- 1. Penalaran Visual (PV) ---
   { id:'PV01', subtes:'PV', pertanyaan:'Manakah pola yang BERBEDA dari empat pola lainnya?',
     opsi:{a:'■ ● ■ ●', b:'▲ ◆ ▲ ◆', c:'★ ☀ ★ ☀', d:'♣ ♠ ♣ ♥', e:'☂ ⚑ ☂ ⚑'},
@@ -210,6 +220,84 @@ const BAKAT_SOAL = [
     opsi:{a:'4,5', b:'9', c:'45', d:'90', e:'900'}, kunci:'b' }
 ];
 
+// Bank aktif yang dipakai oleh app/skoring. Awalnya = DEMO; di-replace
+// oleh hasil loadBakatBank() saat sesi tes mulai.
+let BAKAT_SOAL = BAKAT_SOAL_DEMO.slice();
+
+// Ambil bank soal aktif dari Supabase. Hasil di-merge ke BAKAT_SOAL.
+// Return: { source: 'db'|'demo', soal: [...], count: N }
+async function loadBakatBank() {
+  const A = window.ABM || {};
+  if (!A.isConfigured || !A.isConfigured()) {
+    BAKAT_SOAL = BAKAT_SOAL_DEMO.slice();
+    A.BAKAT_SOAL = BAKAT_SOAL;
+    return { source: 'demo', soal: BAKAT_SOAL, count: BAKAT_SOAL.length, reason: 'supabase-not-configured' };
+  }
+  try {
+    const r = await A.rpc('api_get_bank_soal_active', { p_subtes: null });
+    if (Array.isArray(r) && r.length > 0) {
+      // Map row DB ke struktur BAKAT_SOAL
+      const soal = r.map(row => ({
+        id: row.subtes + String(row.no).padStart(2,'0') + (row.sub_index ? '_' + row.sub_index : ''),
+        no_asli: row.no,
+        sub_index: row.sub_index || 0,
+        subtes: row.subtes,
+        image_path: row.image_path || '',
+        answer_type: row.answer_type || 'letter5',
+        kunci: String(row.kunci || '').toLowerCase().trim(),
+        label: row.label || '',
+        pertanyaan: row.label || ('Soal ' + row.subtes + ' no.' + row.no + (row.sub_index ? ' (jawaban ' + row.sub_index + ')' : '')),
+        opsi: defaultOpsiFor(row.answer_type || 'letter5')
+      }));
+      BAKAT_SOAL = soal;
+      A.BAKAT_SOAL = BAKAT_SOAL;
+      return { source: 'db', soal, count: soal.length };
+    }
+  } catch (e) { /* fallback */ }
+  BAKAT_SOAL = BAKAT_SOAL_DEMO.slice();
+  A.BAKAT_SOAL = BAKAT_SOAL;
+  return { source: 'demo', soal: BAKAT_SOAL, count: BAKAT_SOAL.length, reason: 'db-empty' };
+}
+
+// Generate signed URLs untuk semua image_path soal aktif (anon, default
+// 60 menit). Return Map<image_path, signedUrl>. Dipanggil sekali saat
+// startTes agar tidak ada round-trip per soal.
+async function signBakatPages(soalList) {
+  const A = window.ABM || {};
+  const sb = A.getClient && A.getClient();
+  const map = {};
+  if (!sb) return map;
+  const paths = Array.from(new Set((soalList || [])
+    .map(s => s.image_path).filter(p => p && p.length > 0)));
+  if (paths.length === 0) return map;
+  // batch via createSignedUrls (1 request)
+  const { data, error } = await sb.storage.from('bakat-pages')
+    .createSignedUrls(paths, 60 * 60);
+  if (error) { console.warn('createSignedUrls', error); return map; }
+  (data || []).forEach(d => {
+    if (d && d.path && d.signedUrl) map[d.path] = d.signedUrl;
+  });
+  return map;
+}
+
+// Default opsi untuk render UI berdasar answer_type. Hanya dipakai
+// sebagai placeholder; untuk image-based, gambar yang menjadi konten,
+// label opsi (a/b/c/...) dirender oleh views.js.
+function defaultOpsiFor(at) {
+  switch (at) {
+    case 'letter4': return { a:'A', b:'B', c:'C', d:'D' };
+    case 'letter5': return { a:'A', b:'B', c:'C', d:'D', e:'E' };
+    case 'letter6': return { a:'A', b:'B', c:'C', d:'D', e:'E', f:'F' };
+    case 'sb':      return { s:'S (Sama)', b:'B (Berbeda)' };
+    case 'number':  return {}; // input bebas
+    default:        return { a:'A', b:'B', c:'C', d:'D', e:'E' };
+  }
+}
+
 window.ABM = window.ABM || {};
 window.ABM.BAKAT_SUBTES = BAKAT_SUBTES;
 window.ABM.BAKAT_SOAL = BAKAT_SOAL;
+window.ABM.BAKAT_SOAL_DEMO = BAKAT_SOAL_DEMO;
+window.ABM.loadBakatBank = loadBakatBank;
+window.ABM.signBakatPages = signBakatPages;
+window.ABM.defaultOpsiFor = defaultOpsiFor;

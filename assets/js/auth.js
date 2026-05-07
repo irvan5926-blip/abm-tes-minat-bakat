@@ -53,8 +53,18 @@
     return window.ABM.rpc('api_validate_token', { p_token: token });
   }
 
-  async function startSession(token) {
-    const r = await window.ABM.rpc('api_start_session', { p_token: token });
+  // siswaInfo: { nama, nis, kelas, sekolah, tanggal_lahir, jenis_kelamin }
+  async function startSession(token, siswaInfo) {
+    const s = siswaInfo || {};
+    const r = await window.ABM.rpc('api_start_session', {
+      p_token: token,
+      p_siswa_nama: s.nama || '',
+      p_siswa_nis: s.nis || '',
+      p_siswa_kelas: s.kelas || '',
+      p_siswa_sekolah: s.sekolah || '',
+      p_tanggal_lahir: s.tanggal_lahir || null,
+      p_jenis_kelamin: s.jenis_kelamin || null
+    });
     return r;
   }
 
@@ -84,6 +94,7 @@
   }
 
   // ---- Token: admin operations ----
+  // Buat 1 token (siswa info opsional, default kosong - siswa isi sendiri saat login).
   async function adminCreateToken(payload) {
     const sb = window.ABM.getClient();
     if (!sb) return { ok: false, error: 'Supabase belum dikonfigurasi.' };
@@ -91,17 +102,16 @@
     if (!u) return { ok: false, error: 'Belum login admin.' };
     const jenis = (payload.jenis_tes || '').toLowerCase();
     if (['minat','bakat'].indexOf(jenis) < 0) return { ok: false, error: 'Jenis tes harus minat/bakat.' };
-    if (!payload.siswa_nama) return { ok: false, error: 'Nama siswa wajib.' };
 
     const cfg = window.ABM_CONFIG;
-    const expMin = cfg.TOKEN_EXP_MINUTES || 5;
+    const expMin = parseInt(payload.exp_minutes, 10) || cfg.TOKEN_EXP_MINUTES || 5;
     const now = new Date();
     const exp = new Date(now.getTime() + expMin * 60 * 1000);
     const token = window.ABM.generateTokenString();
 
     const { error } = await sb.from('tokens').insert({
       token, jenis_tes: jenis,
-      siswa_nama: payload.siswa_nama,
+      siswa_nama: payload.siswa_nama || '',
       siswa_nis: payload.siswa_nis || '',
       siswa_kelas: payload.siswa_kelas || '',
       siswa_sekolah: payload.siswa_sekolah || '',
@@ -110,9 +120,24 @@
     if (error) return { ok: false, error: error.message };
     await sb.from('audit_log').insert({
       actor: u.email, action: 'GENERATE_TOKEN',
-      detail: 'token=' + token + ' jenis=' + jenis + ' siswa=' + payload.siswa_nama
+      detail: 'token=' + token + ' jenis=' + jenis
     });
     return { ok: true, token, expires_at: exp.toISOString(), expires_in_seconds: expMin * 60 };
+  }
+
+  // Buat banyak token sekaligus via RPC (server generate, lebih cepat & atomic).
+  async function adminCreateTokensBulk(jenisTest, jumlah, expMinutes) {
+    const sb = window.ABM.getClient();
+    if (!sb) return { ok: false, error: 'Supabase belum dikonfigurasi.' };
+    const u = await getCurrentUser();
+    if (!u) return { ok: false, error: 'Belum login admin.' };
+    const r = await window.ABM.rpc('api_admin_create_tokens_bulk', {
+      p_jenis_tes: (jenisTest || '').toLowerCase(),
+      p_jumlah: jumlah,
+      p_exp_minutes: expMinutes,
+      p_admin_id: u.id
+    });
+    return r;
   }
 
   async function adminListTokens() {
@@ -179,11 +204,66 @@
     };
   }
 
+  // ---- Bank Soal Bakat (admin) ----
+  async function adminBankSoalList(filterSubtes) {
+    const sb = window.ABM.getClient();
+    if (!sb) return { ok: false, error: 'Supabase belum dikonfigurasi.' };
+    let q = sb.from('bank_soal_bakat').select('*')
+      .order('subtes').order('no').order('sub_index');
+    if (filterSubtes) q = q.eq('subtes', filterSubtes);
+    const { data, error } = await q;
+    if (error) return { ok: false, error: error.message };
+    return { ok: true, rows: data || [] };
+  }
+
+  async function adminBankSoalUpsert(payload) {
+    return window.ABM.rpc('api_admin_bank_soal_upsert', { p: payload });
+  }
+
+  async function adminBankSoalBulkUpsert(items) {
+    return window.ABM.rpc('api_admin_bank_soal_bulk_upsert', { p_items: items });
+  }
+
+  async function adminBankSoalDelete(id) {
+    return window.ABM.rpc('api_admin_bank_soal_delete', { p_id: id });
+  }
+
+  // Upload file gambar ke bucket bakat-pages.
+  // Return: { ok, path, error }
+  async function adminUploadBakatImage(file, suggestedName) {
+    const sb = window.ABM.getClient();
+    if (!sb) return { ok: false, error: 'Supabase belum dikonfigurasi.' };
+    if (!file) return { ok: false, error: 'File kosong.' };
+    const ext = (file.name.split('.').pop() || 'jpg').toLowerCase();
+    const safeBase = (suggestedName || file.name.replace(/\.[^.]+$/, ''))
+      .replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 60);
+    const uniq = (crypto.randomUUID && crypto.randomUUID()) ||
+                 (Date.now() + '-' + Math.floor(Math.random() * 1e9));
+    const path = `${safeBase}-${uniq}.${ext}`;
+    const { error } = await sb.storage.from('bakat-pages')
+      .upload(path, file, { cacheControl: '3600', upsert: false });
+    if (error) return { ok: false, error: error.message };
+    return { ok: true, path };
+  }
+
+  // Generate signed URL untuk preview di admin (5 menit).
+  async function adminSignBakatImage(path) {
+    const sb = window.ABM.getClient();
+    if (!sb) return { ok: false, error: 'Supabase belum dikonfigurasi.' };
+    if (!path) return { ok: false, error: 'Path kosong.' };
+    const { data, error } = await sb.storage.from('bakat-pages')
+      .createSignedUrl(path, 300);
+    if (error) return { ok: false, error: error.message };
+    return { ok: true, url: data && data.signedUrl };
+  }
+
   window.ABM = window.ABM || {};
   Object.assign(window.ABM, {
     adminLogin, adminSignUp, adminLogout, getCurrentUser, getAdminProfile,
     validateToken, startSession, saveMapping, submitAnswer, finishBakat, finishMinat,
-    adminCreateToken, adminListTokens, adminCancelToken,
-    adminListHasil, adminGetHasilDetail, adminGetStats
+    adminCreateToken, adminCreateTokensBulk, adminListTokens, adminCancelToken,
+    adminListHasil, adminGetHasilDetail, adminGetStats,
+    adminBankSoalList, adminBankSoalUpsert, adminBankSoalBulkUpsert, adminBankSoalDelete,
+    adminUploadBakatImage, adminSignBakatImage
   });
 })();

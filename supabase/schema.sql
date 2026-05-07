@@ -18,12 +18,19 @@
 -- Bersihkan jika ada (idempoten - aman dijalankan ulang)
 drop function if exists public.api_validate_token(text) cascade;
 drop function if exists public.api_start_session(text) cascade;
+drop function if exists public.api_start_session(text, text, text, text, text, date, text) cascade;
+drop function if exists public.api_admin_create_tokens_bulk(text, int, int, uuid) cascade;
 drop function if exists public.api_submit_answer(uuid, text, text, integer, text, boolean) cascade;
 drop function if exists public.api_finish_bakat(uuid, jsonb, jsonb, integer, jsonb) cascade;
 drop function if exists public.api_finish_minat(uuid, jsonb, jsonb, jsonb) cascade;
 drop function if exists public.api_next_program(uuid, text) cascade;
 drop function if exists public.api_expire_old_tokens() cascade;
+drop function if exists public.api_get_bank_soal_active(text) cascade;
+drop function if exists public.api_admin_bank_soal_upsert(jsonb) cascade;
+drop function if exists public.api_admin_bank_soal_delete(uuid) cascade;
+drop function if exists public.api_admin_bank_soal_bulk_upsert(jsonb) cascade;
 
+drop table if exists public.bank_soal_bakat cascade;
 drop table if exists public.audit_log cascade;
 drop table if exists public.hasil cascade;
 drop table if exists public.jawaban cascade;
@@ -57,11 +64,12 @@ create table public.siswa (
 );
 create index idx_siswa_nis on public.siswa(nis);
 
--- Token siswa (8 char, expired 5 menit, sekali pakai)
+-- Token siswa (8 char, expired N menit (default 5), sekali pakai)
+-- Sejak v2.1: token TIDAK menyimpan siswa info. Siswa input identitas saat login.
 create table public.tokens (
   token text primary key,
   jenis_tes text not null check (jenis_tes in ('minat','bakat')),
-  siswa_nama text not null,
+  siswa_nama text default '',     -- legacy/optional, biasanya kosong
   siswa_nis text default '',
   siswa_kelas text default '',
   siswa_sekolah text default '',
@@ -127,17 +135,49 @@ create table public.audit_log (
 );
 create index idx_audit_created on public.audit_log(created_at desc);
 
+-- Bank Soal Bakat (admin-managed). Konten disuplai admin sekolah.
+-- image_path = path di Supabase Storage bucket "bakat-pages" (relatif).
+-- answer_type:
+--   letter4  = pilih a-d
+--   letter5  = pilih a-e
+--   letter6  = pilih a-f
+--   number   = input angka (exact match)
+--   sb       = pilih S (Sama) / B (Berbeda)
+-- sub_index: untuk soal multi-jawaban (mis. 1 soal punya jawaban I, II, III)
+--   diisi 0 untuk soal tunggal; >=1 untuk sub-jawaban.
+-- kunci: jawaban benar (huruf, angka, atau S/B).
+create table public.bank_soal_bakat (
+  id uuid primary key default gen_random_uuid(),
+  subtes text not null check (subtes in ('PV','PN','AV','PU','PS','TD','SI','KK','FA')),
+  no int not null,
+  sub_index int not null default 0,
+  image_path text default '',
+  answer_type text not null default 'letter5'
+    check (answer_type in ('letter4','letter5','letter6','number','sb')),
+  kunci text not null default '',
+  label text default '',
+  durasi_menit int default null,
+  active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  created_by uuid references auth.users(id),
+  unique (subtes, no, sub_index)
+);
+create index idx_bank_subtes on public.bank_soal_bakat(subtes, no, sub_index);
+create index idx_bank_active on public.bank_soal_bakat(active);
+
 -- =================================================================
 -- ROW LEVEL SECURITY
 -- =================================================================
 
-alter table public.admin_profile enable row level security;
-alter table public.siswa         enable row level security;
-alter table public.tokens        enable row level security;
-alter table public.sesi          enable row level security;
-alter table public.jawaban       enable row level security;
-alter table public.hasil         enable row level security;
-alter table public.audit_log     enable row level security;
+alter table public.admin_profile  enable row level security;
+alter table public.siswa          enable row level security;
+alter table public.tokens         enable row level security;
+alter table public.sesi           enable row level security;
+alter table public.jawaban        enable row level security;
+alter table public.hasil          enable row level security;
+alter table public.audit_log      enable row level security;
+alter table public.bank_soal_bakat enable row level security;
 
 -- Authenticated (admin) bisa baca/tulis semua
 create policy "admin all admin_profile" on public.admin_profile for all to authenticated using (true) with check (true);
@@ -147,6 +187,7 @@ create policy "admin all sesi"          on public.sesi          for all to authe
 create policy "admin all jawaban"       on public.jawaban       for all to authenticated using (true) with check (true);
 create policy "admin all hasil"         on public.hasil         for all to authenticated using (true) with check (true);
 create policy "admin all audit"         on public.audit_log     for all to authenticated using (true) with check (true);
+create policy "admin all bank_soal"     on public.bank_soal_bakat for all to authenticated using (true) with check (true);
 
 -- Anon (siswa) TIDAK punya akses langsung ke table.
 -- Mereka hanya bisa lewat RPC `api_*` di bawah (security definer).
@@ -184,19 +225,27 @@ begin
     'ok', true,
     'token', rec.token,
     'jenis_tes', rec.jenis_tes,
-    'siswa_nama', rec.siswa_nama,
-    'siswa_nis', rec.siswa_nis,
-    'siswa_kelas', rec.siswa_kelas,
-    'siswa_sekolah', rec.siswa_sekolah,
+    'siswa_nama', coalesce(rec.siswa_nama, ''),
+    'siswa_nis', coalesce(rec.siswa_nis, ''),
+    'siswa_kelas', coalesce(rec.siswa_kelas, ''),
+    'siswa_sekolah', coalesce(rec.siswa_sekolah, ''),
     'expires_at', rec.expires_at,
     'expires_in_seconds', greatest(0, extract(epoch from (rec.expires_at - now_ts))::int)
   );
 end;
 $$;
 
--- Mulai sesi: validasi token, mark TERPAKAI, buat siswa & sesi
--- Mapping pengacakan dibuat client-side menggunakan seed = sesi_id+token (deterministik).
-create or replace function public.api_start_session(p_token text)
+-- Mulai sesi: terima identitas siswa dari client, validasi token, mark TERPAKAI, buat siswa & sesi
+-- Sejak v2.1: siswa data dikirim oleh client (form identitas), bukan dari tokens table.
+create or replace function public.api_start_session(
+  p_token text,
+  p_siswa_nama text,
+  p_siswa_nis text default '',
+  p_siswa_kelas text default '',
+  p_siswa_sekolah text default '',
+  p_tanggal_lahir date default null,
+  p_jenis_kelamin text default null
+)
 returns jsonb
 language plpgsql
 security definer
@@ -208,20 +257,34 @@ declare
   v_siswa_id uuid;
   v_sesi_id uuid;
   v_existing record;
+  v_nama text := trim(coalesce(p_siswa_nama, ''));
+  v_nis  text := trim(coalesce(p_siswa_nis, ''));
+  v_kls  text := trim(coalesce(p_siswa_kelas, ''));
+  v_sek  text := trim(coalesce(p_siswa_sekolah, ''));
 begin
+  if v_nama = '' then
+    return jsonb_build_object('ok', false, 'error', 'Nama siswa wajib diisi.');
+  end if;
+
   v := public.api_validate_token(p_token);
   if (v->>'ok')::boolean = false then
     return v;
   end if;
   select * into rec from public.tokens where token = upper(p_token);
 
-  -- Cegah double-start: kalau sudah ada sesi belum selesai untuk token ini, kembalikan
+  -- Cegah double-start: kalau sudah ada sesi belum selesai untuk token ini, resume.
   select s.* into v_existing from public.sesi s where s.token = rec.token order by s.started_at desc limit 1;
   if found and v_existing.finished_at is null then
+    -- Update siswa info dari form (kalau ada perubahan)
+    update public.siswa
+      set nama = v_nama, nis = v_nis, kelas = v_kls, sekolah = v_sek,
+          tanggal_lahir = coalesce(p_tanggal_lahir, tanggal_lahir),
+          jenis_kelamin = coalesce(p_jenis_kelamin, jenis_kelamin)
+      where id = v_existing.siswa_id;
     return jsonb_build_object(
       'ok', true, 'resume', true,
       'sesi_id', v_existing.id, 'jenis_tes', v_existing.jenis_tes,
-      'siswa', jsonb_build_object('nama', rec.siswa_nama, 'nis', rec.siswa_nis, 'kelas', rec.siswa_kelas, 'sekolah', rec.siswa_sekolah),
+      'siswa', jsonb_build_object('nama', v_nama, 'nis', v_nis, 'kelas', v_kls, 'sekolah', v_sek),
       'mapping', v_existing.mapping
     );
   end if;
@@ -229,31 +292,78 @@ begin
     return jsonb_build_object('ok', false, 'error', 'Sesi sudah selesai sebelumnya.');
   end if;
 
-  -- Cari/insert siswa
-  if rec.siswa_nis is not null and rec.siswa_nis <> '' then
-    select id into v_siswa_id from public.siswa where nis = rec.siswa_nis limit 1;
-  end if;
-  if v_siswa_id is null then
-    insert into public.siswa(nama, nis, kelas, sekolah)
-    values (rec.siswa_nama, rec.siswa_nis, rec.siswa_kelas, rec.siswa_sekolah)
-    returning id into v_siswa_id;
-  end if;
+  -- Insert siswa baru (selalu insert, biar tiap sesi punya record sendiri)
+  insert into public.siswa(nama, nis, kelas, sekolah, tanggal_lahir, jenis_kelamin)
+  values (v_nama, v_nis, v_kls, v_sek, p_tanggal_lahir, p_jenis_kelamin)
+  returning id into v_siswa_id;
 
   insert into public.sesi(token, siswa_id, jenis_tes, mapping)
   values (rec.token, v_siswa_id, rec.jenis_tes, '{}'::jsonb)
   returning id into v_sesi_id;
 
-  update public.tokens set status='TERPAKAI', used_at=now() where token=rec.token;
+  update public.tokens
+    set status='TERPAKAI', used_at=now(),
+        siswa_nama = v_nama, siswa_nis = v_nis, siswa_kelas = v_kls, siswa_sekolah = v_sek
+    where token=rec.token;
 
   insert into public.audit_log(actor, action, detail)
-  values (v_siswa_id::text, 'START_SESSION', 'sesi=' || v_sesi_id || ' token=' || rec.token);
+  values (v_siswa_id::text, 'START_SESSION', 'sesi=' || v_sesi_id || ' token=' || rec.token || ' nama=' || v_nama);
 
   return jsonb_build_object(
     'ok', true, 'resume', false,
     'sesi_id', v_sesi_id, 'jenis_tes', rec.jenis_tes,
-    'siswa', jsonb_build_object('nama', rec.siswa_nama, 'nis', rec.siswa_nis, 'kelas', rec.siswa_kelas, 'sekolah', rec.siswa_sekolah),
+    'siswa', jsonb_build_object('nama', v_nama, 'nis', v_nis, 'kelas', v_kls, 'sekolah', v_sek),
     'mapping', '{}'::jsonb
   );
+end;
+$$;
+
+-- Generate banyak token sekaligus (admin only)
+create or replace function public.api_admin_create_tokens_bulk(
+  p_jenis_tes text, p_jumlah int, p_exp_minutes int default 5, p_admin_id uuid default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  i int := 0;
+  v_token text;
+  v_chars text := 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  v_tokens jsonb := '[]'::jsonb;
+  v_exp timestamptz;
+begin
+  if p_jenis_tes not in ('minat','bakat') then
+    return jsonb_build_object('ok', false, 'error', 'Jenis tes harus minat/bakat.');
+  end if;
+  if p_jumlah < 1 or p_jumlah > 500 then
+    return jsonb_build_object('ok', false, 'error', 'Jumlah harus 1-500.');
+  end if;
+  if p_exp_minutes < 1 or p_exp_minutes > 480 then
+    return jsonb_build_object('ok', false, 'error', 'Lama berlaku 1-480 menit.');
+  end if;
+  v_exp := now() + (p_exp_minutes || ' minutes')::interval;
+  while i < p_jumlah loop
+    -- Generate 8-char token (A-Z minus I/O, 2-9)
+    v_token := '';
+    for j in 1..8 loop
+      v_token := v_token || substr(v_chars, 1 + (random() * 31)::int, 1);
+    end loop;
+    -- Skip kalau collision (sangat jarang)
+    begin
+      insert into public.tokens(token, jenis_tes, admin_id, expires_at)
+      values (v_token, p_jenis_tes, p_admin_id, v_exp);
+      v_tokens := v_tokens || jsonb_build_object('token', v_token, 'expires_at', v_exp);
+      i := i + 1;
+    exception when unique_violation then
+      -- retry, jangan increment
+      continue;
+    end;
+  end loop;
+  insert into public.audit_log(actor, action, detail)
+  values (coalesce(p_admin_id::text, 'admin'), 'BULK_GENERATE', 'jumlah=' || p_jumlah || ' jenis=' || p_jenis_tes || ' exp_min=' || p_exp_minutes);
+  return jsonb_build_object('ok', true, 'tokens', v_tokens, 'jumlah', p_jumlah, 'expires_at', v_exp);
 end;
 $$;
 
@@ -372,14 +482,160 @@ as $$
   select count(*)::int from upd;
 $$;
 
+-- =================================================================
+-- BANK SOAL BAKAT - admin upsert/delete + anon read (active only)
+-- =================================================================
+
+-- Anon (siswa) ambil bank soal aktif untuk subtes tertentu.
+-- Dipanggil saat siswa mulai tes. Hanya kembalikan kunci untuk skoring sisi
+-- client (frontend perlu tahu jawaban benar untuk hitung benar/salah). Akses
+-- dilindungi oleh fakta siswa hanya panggil ini setelah punya sesi aktif
+-- (token sudah TERPAKAI, tidak bisa di-replay).
+create or replace function public.api_get_bank_soal_active(p_subtes text default null)
+returns setof public.bank_soal_bakat
+language sql
+security definer
+set search_path = public
+as $$
+  select * from public.bank_soal_bakat
+  where active = true
+    and (p_subtes is null or subtes = p_subtes)
+  order by subtes, no, sub_index;
+$$;
+
+-- Admin upsert satu soal. Field: id (opsional, kalau update), subtes, no, sub_index,
+-- image_path, answer_type, kunci, label, durasi_menit, active.
+create or replace function public.api_admin_bank_soal_upsert(p jsonb)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_id uuid := nullif(p->>'id','')::uuid;
+  v_admin uuid := auth.uid();
+begin
+  if v_admin is null then
+    return jsonb_build_object('ok', false, 'error', 'Hanya admin yang bisa upsert bank soal.');
+  end if;
+  if v_id is null then
+    insert into public.bank_soal_bakat(
+      subtes, no, sub_index, image_path, answer_type, kunci, label, durasi_menit, active, created_by
+    ) values (
+      p->>'subtes',
+      coalesce((p->>'no')::int, 0),
+      coalesce((p->>'sub_index')::int, 0),
+      coalesce(p->>'image_path',''),
+      coalesce(p->>'answer_type','letter5'),
+      coalesce(p->>'kunci',''),
+      coalesce(p->>'label',''),
+      nullif(p->>'durasi_menit','')::int,
+      coalesce((p->>'active')::boolean, true),
+      v_admin
+    ) returning id into v_id;
+  else
+    update public.bank_soal_bakat set
+      subtes        = coalesce(p->>'subtes', subtes),
+      no            = coalesce((p->>'no')::int, no),
+      sub_index     = coalesce((p->>'sub_index')::int, sub_index),
+      image_path    = coalesce(p->>'image_path', image_path),
+      answer_type   = coalesce(p->>'answer_type', answer_type),
+      kunci         = coalesce(p->>'kunci', kunci),
+      label         = coalesce(p->>'label', label),
+      durasi_menit  = coalesce(nullif(p->>'durasi_menit','')::int, durasi_menit),
+      active        = coalesce((p->>'active')::boolean, active),
+      updated_at    = now()
+    where id = v_id;
+  end if;
+  insert into public.audit_log(actor, action, detail)
+  values (v_admin::text, 'BANK_SOAL_UPSERT', 'id=' || v_id::text);
+  return jsonb_build_object('ok', true, 'id', v_id);
+end;
+$$;
+
+-- Admin bulk upsert (untuk import CSV).
+-- p_items: jsonb array, tiap entry sama struktur dengan upsert tunggal.
+-- Replace by (subtes, no, sub_index) — entry baru insert, yang sudah ada update.
+create or replace function public.api_admin_bank_soal_bulk_upsert(p_items jsonb)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  it jsonb;
+  cnt int := 0;
+  v_admin uuid := auth.uid();
+begin
+  if v_admin is null then
+    return jsonb_build_object('ok', false, 'error', 'Hanya admin yang bisa bulk upsert.');
+  end if;
+  if jsonb_typeof(p_items) <> 'array' then
+    return jsonb_build_object('ok', false, 'error', 'p_items harus array.');
+  end if;
+  for it in select * from jsonb_array_elements(p_items) loop
+    insert into public.bank_soal_bakat(
+      subtes, no, sub_index, image_path, answer_type, kunci, label, durasi_menit, active, created_by
+    ) values (
+      it->>'subtes',
+      coalesce((it->>'no')::int, 0),
+      coalesce((it->>'sub_index')::int, 0),
+      coalesce(it->>'image_path',''),
+      coalesce(it->>'answer_type','letter5'),
+      coalesce(it->>'kunci',''),
+      coalesce(it->>'label',''),
+      nullif(it->>'durasi_menit','')::int,
+      coalesce((it->>'active')::boolean, true),
+      v_admin
+    )
+    on conflict (subtes, no, sub_index) do update set
+      image_path   = excluded.image_path,
+      answer_type  = excluded.answer_type,
+      kunci        = excluded.kunci,
+      label        = excluded.label,
+      durasi_menit = excluded.durasi_menit,
+      active       = excluded.active,
+      updated_at   = now();
+    cnt := cnt + 1;
+  end loop;
+  insert into public.audit_log(actor, action, detail)
+  values (v_admin::text, 'BANK_SOAL_BULK_UPSERT', 'count=' || cnt::text);
+  return jsonb_build_object('ok', true, 'count', cnt);
+end;
+$$;
+
+create or replace function public.api_admin_bank_soal_delete(p_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_admin uuid := auth.uid();
+begin
+  if v_admin is null then
+    return jsonb_build_object('ok', false, 'error', 'Hanya admin.');
+  end if;
+  delete from public.bank_soal_bakat where id = p_id;
+  insert into public.audit_log(actor, action, detail)
+  values (v_admin::text, 'BANK_SOAL_DELETE', 'id=' || p_id::text);
+  return jsonb_build_object('ok', true);
+end;
+$$;
+
 -- Grant execute pada semua RPC `api_*` ke role anon (siswa) & authenticated (admin)
 grant execute on function public.api_validate_token(text) to anon, authenticated;
-grant execute on function public.api_start_session(text) to anon, authenticated;
+grant execute on function public.api_start_session(text, text, text, text, text, date, text) to anon, authenticated;
+grant execute on function public.api_admin_create_tokens_bulk(text, int, int, uuid) to authenticated;
 grant execute on function public.api_save_mapping(uuid, jsonb) to anon, authenticated;
 grant execute on function public.api_submit_answer(uuid, text, text, int, text, boolean) to anon, authenticated;
 grant execute on function public.api_finish_bakat(uuid, jsonb, jsonb, int, jsonb) to anon, authenticated;
 grant execute on function public.api_finish_minat(uuid, jsonb, jsonb, jsonb) to anon, authenticated;
 grant execute on function public.api_expire_old_tokens() to anon, authenticated;
+grant execute on function public.api_get_bank_soal_active(text) to anon, authenticated;
+grant execute on function public.api_admin_bank_soal_upsert(jsonb) to authenticated;
+grant execute on function public.api_admin_bank_soal_bulk_upsert(jsonb) to authenticated;
+grant execute on function public.api_admin_bank_soal_delete(uuid) to authenticated;
 
 -- =================================================================
 -- AUTO: Trigger untuk membuat admin_profile saat user baru di auth.users
@@ -409,3 +665,28 @@ create trigger on_auth_user_created
 -- Lalu jalankan SELECT di bawah ini SEKALI (uncomment).
 -- =================================================================
 -- select cron.schedule('expire-tokens', '* * * * *', $$select public.api_expire_old_tokens();$$);
+
+-- =================================================================
+-- STORAGE: bucket "bakat-pages". Run sekali setelah schema.
+-- =================================================================
+-- Bucket private. Akses anon via signed URL berdurasi pendek
+-- (frontend createSignedUrl). Path file pakai UUID (sulit ditebak).
+insert into storage.buckets(id, name, public)
+values ('bakat-pages', 'bakat-pages', false)
+on conflict (id) do nothing;
+
+drop policy if exists "bakat-pages admin write"  on storage.objects;
+drop policy if exists "bakat-pages admin read"   on storage.objects;
+drop policy if exists "bakat-pages anon read"    on storage.objects;
+
+-- Admin (authenticated) full akses ke bucket bakat-pages:
+create policy "bakat-pages admin write"
+on storage.objects for all to authenticated
+using (bucket_id = 'bakat-pages')
+with check (bucket_id = 'bakat-pages');
+
+-- Anon (siswa) read-only akses ke bucket bakat-pages:
+-- diperlukan agar frontend (anon key) bisa createSignedUrl saat tes.
+create policy "bakat-pages anon read"
+on storage.objects for select to anon
+using (bucket_id = 'bakat-pages');
